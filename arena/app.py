@@ -545,7 +545,14 @@ def _apply_stream_chunk(
 		round_state["slot_logs"][slot]["completion_tokens"] = usage.get("completion_tokens")
 		round_state["slot_logs"][slot]["reasoning_tokens"] = _extract_reasoning_tokens(usage)
 		reasoning_index = reasoning_message_indices[slot]
-		reasoning_content = _format_reasoning_details(chunk.get("reasoning_details") or [])
+		normalized_reasoning_details = [
+			dict(detail)
+			for detail in (chunk.get("reasoning_details") or [])
+			if isinstance(detail, dict)
+		]
+		if normalized_reasoning_details:
+			round_state["slot_logs"][slot]["reasoning_details"] = normalized_reasoning_details
+		reasoning_content = _format_reasoning_details(normalized_reasoning_details)
 		if reasoning_index is not None:
 			existing_reasoning_content = _message_text_content(
 				histories[slot][reasoning_index]
