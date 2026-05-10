@@ -469,6 +469,177 @@ def submit_vote(round_state: dict[str, Any] | None):
 	return _submit_vote_outputs(candidate_state)
 
 
+def _apply_stream_chunk(
+	round_state: dict[str, Any],
+	histories: list[list[Any]],
+	assistant_message_indices: list[int | None],
+	reasoning_message_indices: list[int | None],
+	completed_slots: set[int],
+	errored_slots: set[int],
+	chunk: dict[str, Any],
+) -> int | None:
+	slot = chunk.get("slot")
+	if not isinstance(slot, int) or not (0 <= slot < PANEL_COUNT):
+		return None
+
+	changed_history = False
+	if chunk.get("event") == "error" or chunk.get("error"):
+		errored_slots.add(slot)
+		round_state["slot_logs"][slot]["status"] = "error"
+		round_state["slot_logs"][slot]["error"] = str(chunk.get("error") or "Unknown error")
+		error_prefix = "\n" if assistant_message_indices[slot] is not None else ""
+		assistant_message_indices[slot] = _upsert_assistant_message(
+			history=histories[slot],
+			message_index=assistant_message_indices[slot],
+			content=f"{error_prefix}[Error] {round_state['slot_logs'][slot]['error']}",
+			append=True,
+		)
+		reasoning_index = reasoning_message_indices[slot]
+		if reasoning_index is not None:
+			reasoning_content = _message_text_content(histories[slot][reasoning_index]).strip()
+			if not reasoning_content:
+				reasoning_content = "_Reasoning trace interrupted by an upstream error._"
+			reasoning_message_indices[slot], assistant_message_indices[slot] = (
+				_upsert_reasoning_message(
+					history=histories[slot],
+					message_index=reasoning_index,
+					slot=slot,
+					content=reasoning_content,
+					usage=chunk.get("usage"),
+					pending=False,
+					assistant_message_index=assistant_message_indices[slot],
+				)
+			)
+		changed_history = True
+	elif chunk.get("event") == "reasoning":
+		reasoning_content = _format_reasoning_details(chunk.get("reasoning_details") or [])
+		if reasoning_content:
+			round_state["slot_logs"][slot]["status"] = "streaming"
+			round_state["slot_logs"][slot]["reasoning_trace"] = reasoning_content
+			round_state["slot_logs"][slot]["reasoning_details"] = [
+				dict(detail)
+				for detail in (chunk.get("reasoning_details") or [])
+				if isinstance(detail, dict)
+			]
+			reasoning_message_indices[slot], assistant_message_indices[slot] = (
+				_upsert_reasoning_message(
+					history=histories[slot],
+					message_index=reasoning_message_indices[slot],
+					slot=slot,
+					content=reasoning_content,
+					usage=chunk.get("usage"),
+					pending=True,
+					assistant_message_index=assistant_message_indices[slot],
+				)
+			)
+			changed_history = True
+	elif chunk.get("event") == "complete":
+		completed_slots.add(slot)
+		usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else {}
+		stats = chunk.get("stats") if isinstance(chunk.get("stats"), dict) else {}
+		round_state["slot_logs"][slot]["status"] = "complete"
+		round_state["slot_logs"][slot]["usage"] = dict(usage)
+		round_state["slot_logs"][slot]["stats"] = dict(stats)
+		round_state["slot_logs"][slot]["finish_reason"] = stats.get("finish_reason")
+		round_state["slot_logs"][slot]["cost"] = usage.get("cost")
+		round_state["slot_logs"][slot]["completion_tokens"] = usage.get("completion_tokens")
+		round_state["slot_logs"][slot]["reasoning_tokens"] = _extract_reasoning_tokens(usage)
+		reasoning_index = reasoning_message_indices[slot]
+		reasoning_content = _format_reasoning_details(chunk.get("reasoning_details") or [])
+		if reasoning_index is not None:
+			existing_reasoning_content = _message_text_content(
+				histories[slot][reasoning_index]
+			).strip()
+			final_reasoning_content = (
+				existing_reasoning_content
+				or reasoning_content
+				or "_No reasoning trace was exposed in the final stream payload._"
+			)
+			reasoning_message_indices[slot], assistant_message_indices[slot] = (
+				_upsert_reasoning_message(
+					history=histories[slot],
+					message_index=reasoning_index,
+					slot=slot,
+					content=final_reasoning_content,
+					usage=chunk.get("usage"),
+					pending=False,
+					assistant_message_index=assistant_message_indices[slot],
+				)
+			)
+		elif reasoning_content:
+			reasoning_message_indices[slot], assistant_message_indices[slot] = (
+				_upsert_reasoning_message(
+					history=histories[slot],
+					message_index=None,
+					slot=slot,
+					content=reasoning_content,
+					usage=chunk.get("usage"),
+					pending=False,
+					assistant_message_index=assistant_message_indices[slot],
+				)
+			)
+		elif _extract_reasoning_tokens(chunk.get("usage")):
+			reasoning_message_indices[slot], assistant_message_indices[slot] = (
+				_upsert_reasoning_message(
+					history=histories[slot],
+					message_index=None,
+					slot=slot,
+					content=(
+						"This model reported reasoning token usage, but it did not expose a "
+						"reasoning trace in the OpenRouter stream for this response."
+					),
+					usage=chunk.get("usage"),
+					pending=False,
+					unavailable=True,
+					assistant_message_index=assistant_message_indices[slot],
+				)
+			)
+		histories[slot] = _stats_footer(histories[slot], chunk)
+		changed_history = True
+	else:
+		delta = chunk.get("delta", "")
+		if delta:
+			round_state["slot_logs"][slot]["status"] = "streaming"
+			round_state["slot_logs"][slot]["final_response"] = (
+				f"{round_state['slot_logs'][slot]['final_response']}{delta}"
+			)
+			assistant_message_indices[slot] = _upsert_assistant_message(
+				history=histories[slot],
+				message_index=assistant_message_indices[slot],
+				content=delta,
+				append=True,
+			)
+			changed_history = True
+
+	if not changed_history and chunk.get("event") not in {"complete", "error"}:
+		return None
+
+	_finalize_round_state_logs(
+		round_state, histories, assistant_message_indices, reasoning_message_indices
+	)
+	return slot
+
+
+def _finalize_generation_state(
+	round_state: dict[str, Any],
+	histories: list[list[Any]],
+	assistant_message_indices: list[int | None],
+	reasoning_message_indices: list[int | None],
+	completed_slots: set[int],
+	errored_slots: set[int],
+) -> None:
+	_finalize_round_state_logs(
+		round_state, histories, assistant_message_indices, reasoning_message_indices
+	)
+	round_state["completed_slots"] = sorted(completed_slots)
+	round_state["errored_slots"] = sorted(errored_slots)
+	round_state["generation_completed_at"] = datetime.now(timezone.utc).isoformat()
+	round_state["ready_for_vote"] = len(completed_slots) + len(
+		errored_slots
+	) == PANEL_COUNT and bool(completed_slots)
+	round_state["vote_stage"] = "pick_first" if completed_slots else "unavailable"
+
+
 async def stream_all_models(
 	user_text: str,
 	system_prompt: str,
@@ -567,160 +738,30 @@ async def stream_all_models(
 		message_payload,
 		reasoning=DEFAULT_REASONING_SETTINGS,
 	):
-		slot = chunk.get("slot")
-		if not isinstance(slot, int) or not (0 <= slot < PANEL_COUNT):
-			continue
-
-		changed_history = False
-		if chunk.get("event") == "error" or chunk.get("error"):
-			errored_slots.add(slot)
-			round_state["slot_logs"][slot]["status"] = "error"
-			round_state["slot_logs"][slot]["error"] = str(chunk.get("error") or "Unknown error")
-			error_prefix = "\n" if assistant_message_indices[slot] is not None else ""
-			assistant_message_indices[slot] = _upsert_assistant_message(
-				history=histories[slot],
-				message_index=assistant_message_indices[slot],
-				content=f"{error_prefix}[Error] {round_state['slot_logs'][slot]['error']}",
-				append=True,
-			)
-			reasoning_index = reasoning_message_indices[slot]
-			if reasoning_index is not None:
-				reasoning_content = _message_text_content(histories[slot][reasoning_index]).strip()
-				if not reasoning_content:
-					reasoning_content = "_Reasoning trace interrupted by an upstream error._"
-				reasoning_message_indices[slot], assistant_message_indices[slot] = (
-					_upsert_reasoning_message(
-						history=histories[slot],
-						message_index=reasoning_index,
-						slot=slot,
-						content=reasoning_content,
-						usage=chunk.get("usage"),
-						pending=False,
-						assistant_message_index=assistant_message_indices[slot],
-					)
-				)
-			changed_history = True
-		elif chunk.get("event") == "reasoning":
-			reasoning_content = _format_reasoning_details(chunk.get("reasoning_details") or [])
-			if reasoning_content:
-				round_state["slot_logs"][slot]["status"] = "streaming"
-				round_state["slot_logs"][slot]["reasoning_trace"] = reasoning_content
-				round_state["slot_logs"][slot]["reasoning_details"] = [
-					dict(detail)
-					for detail in (chunk.get("reasoning_details") or [])
-					if isinstance(detail, dict)
-				]
-				reasoning_message_indices[slot], assistant_message_indices[slot] = (
-					_upsert_reasoning_message(
-						history=histories[slot],
-						message_index=reasoning_message_indices[slot],
-						slot=slot,
-						content=reasoning_content,
-						usage=chunk.get("usage"),
-						pending=True,
-						assistant_message_index=assistant_message_indices[slot],
-					)
-				)
-				changed_history = True
-		elif chunk.get("event") == "complete":
-			completed_slots.add(slot)
-			usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else {}
-			stats = chunk.get("stats") if isinstance(chunk.get("stats"), dict) else {}
-			round_state["slot_logs"][slot]["status"] = "complete"
-			round_state["slot_logs"][slot]["usage"] = dict(usage)
-			round_state["slot_logs"][slot]["stats"] = dict(stats)
-			round_state["slot_logs"][slot]["finish_reason"] = stats.get("finish_reason")
-			round_state["slot_logs"][slot]["cost"] = usage.get("cost")
-			round_state["slot_logs"][slot]["completion_tokens"] = usage.get("completion_tokens")
-			round_state["slot_logs"][slot]["reasoning_tokens"] = _extract_reasoning_tokens(usage)
-			reasoning_index = reasoning_message_indices[slot]
-			reasoning_content = _format_reasoning_details(chunk.get("reasoning_details") or [])
-			if reasoning_index is not None:
-				existing_reasoning_content = _message_text_content(
-					histories[slot][reasoning_index]
-				).strip()
-				final_reasoning_content = (
-					existing_reasoning_content
-					or reasoning_content
-					or "_No reasoning trace was exposed in the final stream payload._"
-				)
-				reasoning_message_indices[slot], assistant_message_indices[slot] = (
-					_upsert_reasoning_message(
-						history=histories[slot],
-						message_index=reasoning_index,
-						slot=slot,
-						content=final_reasoning_content,
-						usage=chunk.get("usage"),
-						pending=False,
-						assistant_message_index=assistant_message_indices[slot],
-					)
-				)
-			elif reasoning_content:
-				reasoning_message_indices[slot], assistant_message_indices[slot] = (
-					_upsert_reasoning_message(
-						history=histories[slot],
-						message_index=None,
-						slot=slot,
-						content=reasoning_content,
-						usage=chunk.get("usage"),
-						pending=False,
-						assistant_message_index=assistant_message_indices[slot],
-					)
-				)
-			elif _extract_reasoning_tokens(chunk.get("usage")):
-				reasoning_message_indices[slot], assistant_message_indices[slot] = (
-					_upsert_reasoning_message(
-						history=histories[slot],
-						message_index=None,
-						slot=slot,
-						content=(
-							"This model reported reasoning token usage, but it did not expose a "
-							"reasoning trace in the OpenRouter stream for this response."
-						),
-						usage=chunk.get("usage"),
-						pending=False,
-						unavailable=True,
-						assistant_message_index=assistant_message_indices[slot],
-					)
-				)
-			histories[slot] = _stats_footer(histories[slot], chunk)
-			changed_history = True
-		else:
-			delta = chunk.get("delta", "")
-			if delta:
-				round_state["slot_logs"][slot]["status"] = "streaming"
-				round_state["slot_logs"][slot]["final_response"] = (
-					f"{round_state['slot_logs'][slot]['final_response']}{delta}"
-				)
-				assistant_message_indices[slot] = _upsert_assistant_message(
-					history=histories[slot],
-					message_index=assistant_message_indices[slot],
-					content=delta,
-					append=True,
-				)
-				changed_history = True
-
-		if not changed_history and chunk.get("event") not in {"complete", "error"}:
-			continue
-
-		_finalize_round_state_logs(
-			round_state, histories, assistant_message_indices, reasoning_message_indices
+		slot = _apply_stream_chunk(
+			round_state,
+			histories,
+			assistant_message_indices,
+			reasoning_message_indices,
+			completed_slots,
+			errored_slots,
+			chunk,
 		)
+		if slot is None:
+			continue
 		yield _streaming_outputs(
 			chatbot_updates=_targeted_chatbot_value_updates(histories, display_order, slot=slot),
 			round_state=round_state,
 		)
 
-	_finalize_round_state_logs(
-		round_state, histories, assistant_message_indices, reasoning_message_indices
+	_finalize_generation_state(
+		round_state,
+		histories,
+		assistant_message_indices,
+		reasoning_message_indices,
+		completed_slots,
+		errored_slots,
 	)
-	round_state["completed_slots"] = sorted(completed_slots)
-	round_state["errored_slots"] = sorted(errored_slots)
-	round_state["generation_completed_at"] = datetime.now(timezone.utc).isoformat()
-	round_state["ready_for_vote"] = len(completed_slots) + len(
-		errored_slots
-	) == PANEL_COUNT and bool(completed_slots)
-	round_state["vote_stage"] = "pick_first" if completed_slots else "unavailable"
 
 	yield _streaming_outputs(
 		round_state=round_state,

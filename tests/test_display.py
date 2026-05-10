@@ -1,6 +1,7 @@
 import gradio as gr
 
 from arena.ui.display import (
+	_chatbot_config,
 	_chatbot_panel_label,
 	_extract_reasoning_tokens,
 	_finalize_round_state_logs,
@@ -12,6 +13,12 @@ from arena.ui.display import (
 	_upsert_assistant_message,
 	_upsert_reasoning_message,
 )
+
+
+def test_chatbot_config_uses_messages_type() -> None:
+	chatbot = _chatbot_config(label="Panel A")
+
+	assert chatbot.type == "messages"
 
 
 def test_chatbot_panel_label_uses_model_label_after_submission() -> None:
