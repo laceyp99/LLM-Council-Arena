@@ -218,6 +218,7 @@ class OpenRouterAPI:
 		final_usage: dict[str, Any] | None = None
 		finish_reason: str | None = None
 		accumulated_reasoning_details: list[dict[str, Any]] = []
+		provider_error_seen = False
 
 		try:
 			async with client.stream(
@@ -240,6 +241,7 @@ class OpenRouterAPI:
 							data = json.loads(data_str)
 							error = data.get("error")
 							if isinstance(error, dict):
+								provider_error_seen = True
 								yield {
 									"event": "error",
 									"slot": slot,
@@ -298,6 +300,9 @@ class OpenRouterAPI:
 						except (json.JSONDecodeError, KeyError, IndexError):
 							# Handle potential malformed JSON or unexpected structure
 							continue
+
+				if provider_error_seen:
+					return
 
 				completed_at = time.perf_counter()
 				total_generation_time = completed_at - request_started_at
