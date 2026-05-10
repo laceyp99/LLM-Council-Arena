@@ -116,6 +116,32 @@ def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp
 	assert (tmp_path / str(submitted_state["session_dir"]) / "round.json").exists()
 
 
+def test_submit_vote_returns_current_state_when_round_log_write_fails(
+	monkeypatch, tmp_path
+) -> None:
+	_stub_vote_ui_helpers(monkeypatch)
+	_patch_log_paths(monkeypatch, tmp_path)
+	round_state = _build_votable_round_state()
+	append_calls: list[dict[str, object]] = []
+	monkeypatch.setattr(
+		app_module,
+		"_write_round_logs",
+		lambda candidate_state: (_ for _ in ()).throw(RuntimeError("log store unavailable")),
+	)
+	monkeypatch.setattr(
+		app_module,
+		"_append_vote_record",
+		lambda record: append_calls.append(record),
+	)
+
+	outputs = app_module.submit_vote(round_state)
+
+	assert outputs[0] == round_state
+	assert append_calls == []
+	assert not app_module.VOTES_FILE.exists()
+	assert not app_module.SESSION_LOGS_DIR.exists()
+
+
 def test_submit_vote_returns_existing_submission_without_rewriting(monkeypatch, tmp_path) -> None:
 	_stub_vote_ui_helpers(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
