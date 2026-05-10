@@ -50,7 +50,7 @@ OPENROUTER_API_KEY="your_openrouter_api_key_here"
 Start the Gradio app from the workspace root:
 
 ```powershell
-python arena
+python -m arena
 ```
 
 If you install the project into your environment, you can also use the console script:
