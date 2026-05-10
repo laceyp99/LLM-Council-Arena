@@ -4,6 +4,62 @@ import pytest
 from arena import app as app_module
 
 
+def _stub_ui_helpers(monkeypatch) -> None:
+	monkeypatch.setattr(
+		app_module,
+		"_chatbot_updates",
+		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
+	)
+	monkeypatch.setattr(
+		app_module,
+		"_targeted_chatbot_value_updates",
+		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
+	)
+	monkeypatch.setattr(
+		app_module,
+		"_vote_ui_updates",
+		lambda *args, **kwargs: (
+			"vote-a",
+			"vote-b",
+			"vote-c",
+			"vote-reset",
+			"vote-submit",
+		),
+	)
+
+
+async def _collect_stream_outputs(*args: object) -> list[tuple[object, ...]]:
+	return [output async for output in app_module.stream_all_models(*args)]
+
+
+def _fake_streaming_api(monkeypatch, chunks: list[dict[str, object]]) -> list[dict[str, object]]:
+	requests: list[dict[str, object]] = []
+
+	class FakeOpenRouterAPI:
+		def __init__(self, api_key: str, site_url: str, site_name: str) -> None:
+			requests.append(
+				{
+					"api_key": api_key,
+					"site_url": site_url,
+					"site_name": site_name,
+				}
+			)
+
+		async def prompt_models_concurrent(self, prompt_requests, message_payload, **kwargs):
+			requests.append(
+				{
+					"prompt_requests": prompt_requests,
+					"message_payload": message_payload,
+					"kwargs": kwargs,
+				}
+			)
+			for chunk in chunks:
+				yield dict(chunk)
+
+	monkeypatch.setattr(app_module, "OpenRouterAPI", FakeOpenRouterAPI)
+	return requests
+
+
 def _build_generation_context() -> tuple[
 	dict[str, object],
 	list[list[object]],
@@ -208,41 +264,157 @@ def test_finalize_generation_state_marks_vote_unavailable_without_completions() 
 
 @pytest.mark.anyio
 async def test_stream_all_models_blocks_when_panel_has_no_model_selected(monkeypatch) -> None:
-	monkeypatch.setattr(
-		app_module,
-		"_chatbot_updates",
-		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
-	)
-	monkeypatch.setattr(
-		app_module,
-		"_targeted_chatbot_value_updates",
-		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
-	)
-	monkeypatch.setattr(
-		app_module,
-		"_vote_ui_updates",
-		lambda *args, **kwargs: (
-			"vote-a",
-			"vote-b",
-			"vote-c",
-			"vote-reset",
-			"vote-submit",
-		),
-	)
+	_stub_ui_helpers(monkeypatch)
 
-	outputs = [
-		output
-		async for output in app_module.stream_all_models(
-			"Compare models.",
-			"System prompt",
-			"alpha/one",
-			"",
-			"gamma/three",
-		)
-	]
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"",
+		"gamma/three",
+	)
 
 	final_round_state = outputs[-1][4]
 
 	assert len(outputs) == 2
 	assert final_round_state["slot_logs"][1]["status"] == "blocked"
 	assert final_round_state["slot_logs"][1]["error"] == "No model selected for this panel."
+
+
+@pytest.mark.anyio
+async def test_stream_all_models_blocks_when_api_key_is_missing(monkeypatch) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", None)
+
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+	)
+
+	final_round_state = outputs[-1][4]
+
+	assert len(outputs) == 2
+	assert [slot_log["status"] for slot_log in final_round_state["slot_logs"]] == [
+		"blocked",
+		"blocked",
+		"blocked",
+	]
+	assert all(
+		slot_log["error"] == "Missing OPENROUTER_API_KEY in environment."
+		for slot_log in final_round_state["slot_logs"]
+	)
+
+
+@pytest.mark.anyio
+async def test_stream_all_models_completes_successfully_with_fake_stream(monkeypatch) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
+	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	requests = _fake_streaming_api(
+		monkeypatch,
+		[
+			{"slot": 0, "delta": "Alpha answer"},
+			{
+				"slot": 1,
+				"event": "reasoning",
+				"reasoning_details": [{"type": "reasoning.summary", "summary": "Beta summary"}],
+				"usage": {"completion_tokens_details": {"reasoning_tokens": 5}},
+			},
+			{
+				"slot": 0,
+				"event": "complete",
+				"usage": {"completion_tokens": 20, "cost": 0.001},
+				"stats": {"finish_reason": "stop", "total_generation_time": 1.2},
+			},
+			{"slot": 1, "delta": "Beta answer"},
+			{
+				"slot": 1,
+				"event": "complete",
+				"usage": {
+					"completion_tokens": 25,
+					"cost": 0.002,
+					"completion_tokens_details": {"reasoning_tokens": 5},
+				},
+				"reasoning_details": [{"type": "reasoning.summary", "summary": "Beta summary"}],
+				"stats": {"finish_reason": "stop", "total_generation_time": 1.5},
+			},
+			{"slot": 2, "delta": "Gamma answer"},
+			{
+				"slot": 2,
+				"event": "complete",
+				"usage": {"completion_tokens": 30, "cost": 0.003},
+				"stats": {"finish_reason": "stop", "total_generation_time": 1.8},
+			},
+		],
+	)
+
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+	)
+
+	final_round_state = outputs[-1][4]
+
+	assert requests[0]["api_key"] == "test-api-key"
+	assert requests[1]["prompt_requests"] == [
+		{"slot": 0, "model": "alpha/one"},
+		{"slot": 1, "model": "beta/two"},
+		{"slot": 2, "model": "gamma/three"},
+	]
+	assert requests[1]["kwargs"] == {"reasoning": app_module.DEFAULT_REASONING_SETTINGS}
+	assert final_round_state["ready_for_vote"] is True
+	assert final_round_state["vote_stage"] == "pick_first"
+	assert final_round_state["completed_slots"] == [0, 1, 2]
+	assert final_round_state["errored_slots"] == []
+	assert final_round_state["slot_logs"][0]["final_response"] == "Alpha answer"
+	assert final_round_state["slot_logs"][1]["reasoning_trace"] == "**Summary**\n\nBeta summary"
+	assert final_round_state["slot_logs"][2]["completion_tokens"] == 30
+
+
+@pytest.mark.anyio
+async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(monkeypatch) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
+	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	_fake_streaming_api(
+		monkeypatch,
+		[
+			{"slot": 0, "delta": "Alpha answer"},
+			{"slot": 0, "event": "complete", "usage": {}, "stats": {}},
+			{
+				"slot": 1,
+				"event": "reasoning",
+				"reasoning_details": [{"type": "reasoning.summary", "summary": "Interrupted"}],
+			},
+			{"slot": 1, "event": "error", "error": "provider failure"},
+			{"slot": 2, "delta": "Gamma answer"},
+			{
+				"slot": 2,
+				"event": "complete",
+				"usage": {"completion_tokens": 12},
+				"stats": {"finish_reason": "stop"},
+			},
+		],
+	)
+
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+	)
+
+	final_round_state = outputs[-1][4]
+
+	assert final_round_state["ready_for_vote"] is True
+	assert final_round_state["completed_slots"] == [0, 2]
+	assert final_round_state["errored_slots"] == [1]
+	assert final_round_state["slot_logs"][1]["status"] == "error"
+	assert final_round_state["slot_logs"][1]["error"] == "provider failure"
