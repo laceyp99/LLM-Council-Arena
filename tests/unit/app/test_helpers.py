@@ -47,6 +47,11 @@ def test_ensure_log_store_and_append_vote_record_use_configured_paths(
 	meta_log_file = logs_dir / "meta.json"
 	votes_file = tmp_path / "votes.json"
 
+	assert not logs_dir.exists()
+	assert not session_logs_dir.exists()
+	assert not meta_log_file.exists()
+	assert not votes_file.exists()
+
 	monkeypatch.setattr(app_module, "LOGS_DIR", logs_dir)
 	monkeypatch.setattr(app_module, "SESSION_LOGS_DIR", session_logs_dir)
 	monkeypatch.setattr(app_module, "META_LOG_FILE", meta_log_file)
