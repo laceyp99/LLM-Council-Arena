@@ -98,6 +98,56 @@ def test_submit_vote_writes_round_artifacts_and_vote_record(monkeypatch, tmp_pat
 	assert meta_log["total_rounds"] == 1
 
 
+def test_submit_vote_leaves_partial_session_artifacts_when_meta_update_fails(
+	monkeypatch, tmp_path
+) -> None:
+	_stub_vote_ui_helpers(monkeypatch)
+	_patch_log_paths(monkeypatch, tmp_path)
+	round_state = _build_votable_round_state()
+	written_paths: list[object] = []
+	append_calls: list[dict[str, object]] = []
+	original_write_json_file = app_module._write_json_file
+
+	def tracking_write_json_file(path, payload) -> None:
+		written_paths.append(path)
+		original_write_json_file(path, payload)
+
+	monkeypatch.setattr(app_module, "_write_json_file", tracking_write_json_file)
+	monkeypatch.setattr(
+		app_module,
+		"_update_meta_log",
+		lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("meta store unavailable")),
+	)
+	monkeypatch.setattr(
+		app_module,
+		"_append_vote_record",
+		lambda record: append_calls.append(record),
+	)
+
+	outputs = app_module.submit_vote(round_state)
+	submitted_state = outputs[0]
+	session_file_paths = [
+		path for path in written_paths if app_module.SESSION_LOGS_DIR in path.parents
+	]
+	session_dirs = {path.parent for path in session_file_paths}
+	session_dir = session_dirs.pop()
+
+	assert submitted_state == round_state
+	assert append_calls == []
+	assert not app_module.VOTES_FILE.exists()
+	assert len(session_dirs) == 0
+	assert sorted(path.name for path in session_file_paths) == [
+		"generation.json",
+		"histories.json",
+		"round.json",
+		"vote.json",
+	]
+	assert session_dir.joinpath("round.json").exists()
+	assert session_dir.joinpath("vote.json").exists()
+	assert session_dir.joinpath("histories.json").exists()
+	assert session_dir.joinpath("generation.json").exists()
+
+
 def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp_path) -> None:
 	_stub_vote_ui_helpers(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
