@@ -143,6 +143,11 @@ def _ensure_log_store() -> None:
 		_write_json_file(META_LOG_FILE, _empty_meta_log())
 
 
+def _bootstrap_persistence() -> None:
+	_ensure_votes_file()
+	_ensure_log_store()
+
+
 def _append_vote_record(record: dict[str, Any]) -> None:
 	_ensure_votes_file()
 
@@ -349,10 +354,6 @@ def _write_round_logs(round_state: dict[str, Any]) -> str:
 	session_dir_relative = session_dir.relative_to(APP_DIR).as_posix()
 	_update_meta_log(round_state, session_dir_relative)
 	return session_dir_relative
-
-
-_ensure_votes_file()
-_ensure_log_store()
 
 
 def _chatbot_label(model_id: str) -> str:
@@ -1063,4 +1064,5 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 
 
 if __name__ == "__main__":
+	_bootstrap_persistence()
 	demo.queue().launch()

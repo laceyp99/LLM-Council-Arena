@@ -13,6 +13,9 @@ def test_main_entrypoint_launches_demo(monkeypatch) -> None:
 	main_module = importlib.import_module("arena.__main__")
 	launch_calls: list[str] = []
 
+	def fake_bootstrap_persistence() -> None:
+		launch_calls.append("bootstrap")
+
 	class FakeQueuedDemo:
 		def launch(self) -> None:
 			launch_calls.append("launch")
@@ -22,8 +25,9 @@ def test_main_entrypoint_launches_demo(monkeypatch) -> None:
 			launch_calls.append("queue")
 			return FakeQueuedDemo()
 
+	monkeypatch.setattr(main_module, "_bootstrap_persistence", fake_bootstrap_persistence)
 	monkeypatch.setattr(main_module, "demo", FakeDemo())
 
 	main_module.main()
 
-	assert launch_calls == ["queue", "launch"]
+	assert launch_calls == ["bootstrap", "queue", "launch"]

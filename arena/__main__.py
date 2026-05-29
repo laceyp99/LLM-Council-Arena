@@ -1,7 +1,8 @@
-from .app import demo
+from .app import _bootstrap_persistence, demo
 
 
 def main() -> None:
+	_bootstrap_persistence()
 	demo.queue().launch()
 
 
