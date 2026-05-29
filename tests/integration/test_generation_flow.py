@@ -443,10 +443,6 @@ async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(mon
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(
-	strict=True,
-	reason="stream_all_models still returns after prompt_models_concurrent swallows producer failures",
-)
 async def test_stream_all_models_surfaces_background_stream_failure(monkeypatch) -> None:
 	_stub_ui_helpers(monkeypatch)
 	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")

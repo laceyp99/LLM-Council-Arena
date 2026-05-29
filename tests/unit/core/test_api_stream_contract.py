@@ -183,10 +183,6 @@ async def _failing_prompt_model(self, client, request, messages, **kwargs):
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(
-	strict=True,
-	reason="prompt_models_concurrent still swallows background producer exceptions",
-)
 async def test_prompt_models_concurrent_surfaces_background_task_failure(monkeypatch) -> None:
 	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
 	monkeypatch.setattr(api_module.OpenRouterAPI, "_prompt_model", _failing_prompt_model)
