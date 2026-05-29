@@ -1,4 +1,5 @@
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -331,28 +332,31 @@ def _write_round_logs(round_state: dict[str, Any]) -> str:
 	session_dir_name = f"{_timestamp_slug(str(round_state.get('submitted_at') or ''))}_{round_id}"
 	session_dir = SESSION_LOGS_DIR / session_dir_name
 	session_dir.mkdir(parents=True, exist_ok=True)
-
-	_write_json_file(session_dir / "round.json", _build_round_payload(round_state))
-	_write_json_file(
-		session_dir / "vote.json",
-		{
-			"schema_version": 1,
-			"round_id": round_id,
-			"submitted_at": round_state.get("submitted_at"),
-			"vote_sequence": {
-				"first_choice": round_state.get("first_choice"),
-				"second_choice": round_state.get("second_choice"),
-				"third_choice": round_state.get("third_choice"),
-			},
-			"display_mapping": _display_mapping_from_state(round_state),
-			"ranking": _ranking_details_from_state(round_state),
-		},
-	)
-	_write_json_file(session_dir / "histories.json", _build_histories_payload(round_state))
-	_write_json_file(session_dir / "generation.json", _build_generation_payload(round_state))
-
 	session_dir_relative = session_dir.relative_to(APP_DIR).as_posix()
-	_update_meta_log(round_state, session_dir_relative)
+
+	try:
+		_write_json_file(session_dir / "round.json", _build_round_payload(round_state))
+		_write_json_file(
+			session_dir / "vote.json",
+			{
+				"schema_version": 1,
+				"round_id": round_id,
+				"submitted_at": round_state.get("submitted_at"),
+				"vote_sequence": {
+					"first_choice": round_state.get("first_choice"),
+					"second_choice": round_state.get("second_choice"),
+					"third_choice": round_state.get("third_choice"),
+				},
+				"display_mapping": _display_mapping_from_state(round_state),
+				"ranking": _ranking_details_from_state(round_state),
+			},
+		)
+		_write_json_file(session_dir / "histories.json", _build_histories_payload(round_state))
+		_write_json_file(session_dir / "generation.json", _build_generation_payload(round_state))
+		_update_meta_log(round_state, session_dir_relative)
+	except Exception:
+		shutil.rmtree(session_dir, ignore_errors=True)
+		raise
 	return session_dir_relative
 
 

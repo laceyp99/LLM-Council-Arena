@@ -98,7 +98,7 @@ def test_submit_vote_writes_round_artifacts_and_vote_record(monkeypatch, tmp_pat
 	assert meta_log["total_rounds"] == 1
 
 
-def test_submit_vote_leaves_partial_session_artifacts_when_meta_update_fails(
+def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 	monkeypatch, tmp_path
 ) -> None:
 	_stub_vote_ui_helpers(monkeypatch)
@@ -135,17 +135,14 @@ def test_submit_vote_leaves_partial_session_artifacts_when_meta_update_fails(
 	assert submitted_state == round_state
 	assert append_calls == []
 	assert not app_module.VOTES_FILE.exists()
-	assert len(session_dirs) == 0
 	assert sorted(path.name for path in session_file_paths) == [
 		"generation.json",
 		"histories.json",
 		"round.json",
 		"vote.json",
 	]
-	assert session_dir.joinpath("round.json").exists()
-	assert session_dir.joinpath("vote.json").exists()
-	assert session_dir.joinpath("histories.json").exists()
-	assert session_dir.joinpath("generation.json").exists()
+	assert not session_dir.exists()
+	assert not any(path.exists() for path in session_file_paths)
 
 
 def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp_path) -> None:
