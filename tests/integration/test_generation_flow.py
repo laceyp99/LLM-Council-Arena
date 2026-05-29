@@ -2,6 +2,7 @@ import gradio as gr
 import pytest
 
 from arena import app as app_module
+from arena.core import api as api_module
 
 
 def _stub_ui_helpers(monkeypatch) -> None:
@@ -58,6 +59,27 @@ def _fake_streaming_api(monkeypatch, chunks: list[dict[str, object]]) -> list[di
 
 	monkeypatch.setattr(app_module, "OpenRouterAPI", FakeOpenRouterAPI)
 	return requests
+
+
+class _NoopAsyncClient:
+	def __init__(self, *args, **kwargs) -> None:
+		self.args = args
+		self.kwargs = kwargs
+
+	async def __aenter__(self):
+		return self
+
+	async def __aexit__(self, exc_type, exc, tb) -> None:
+		return None
+
+
+async def _failing_prompt_model(self, client, request, messages, **kwargs):
+	yield {
+		"slot": request["slot"],
+		"model": request["model"],
+		"delta": "first chunk",
+	}
+	raise RuntimeError("producer exploded")
 
 
 def _build_generation_context() -> tuple[
@@ -418,3 +440,30 @@ async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(mon
 	assert final_round_state["errored_slots"] == [1]
 	assert final_round_state["slot_logs"][1]["status"] == "error"
 	assert final_round_state["slot_logs"][1]["error"] == "provider failure"
+
+
+@pytest.mark.anyio
+@pytest.mark.xfail(
+	strict=True,
+	reason="stream_all_models still returns after prompt_models_concurrent swallows producer failures",
+)
+async def test_stream_all_models_surfaces_background_stream_failure(monkeypatch) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
+	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
+	monkeypatch.setattr(app_module.OpenRouterAPI, "_prompt_model", _failing_prompt_model)
+
+	outputs: list[tuple[object, ...]] = []
+
+	with pytest.raises(RuntimeError, match="producer exploded"):
+		async for output in app_module.stream_all_models(
+			"Compare models.",
+			"System prompt",
+			"alpha/one",
+			"beta/two",
+			"gamma/three",
+		):
+			outputs.append(output)
+
+	assert outputs

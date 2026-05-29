@@ -41,6 +41,18 @@ class _FakeAsyncClient:
 		return self._response
 
 
+class _NoopAsyncClient:
+	def __init__(self, *args, **kwargs) -> None:
+		self.args = args
+		self.kwargs = kwargs
+
+	async def __aenter__(self):
+		return self
+
+	async def __aexit__(self, exc_type, exc, tb) -> None:
+		return None
+
+
 async def _collect_prompt_chunks(
 	lines: list[str], monkeypatch
 ) -> tuple[list[dict], list[dict[str, object]]]:
@@ -159,3 +171,40 @@ async def test_prompt_model_yields_error_for_http_failure(monkeypatch) -> None:
 	]
 
 	assert chunks == [{"slot": 2, "model": "beta/two", "error": "bad gateway"}]
+
+
+async def _failing_prompt_model(self, client, request, messages, **kwargs):
+	yield {
+		"slot": request["slot"],
+		"model": request["model"],
+		"delta": "first chunk",
+	}
+	raise RuntimeError("producer exploded")
+
+
+@pytest.mark.anyio
+@pytest.mark.xfail(
+	strict=True,
+	reason="prompt_models_concurrent still swallows background producer exceptions",
+)
+async def test_prompt_models_concurrent_surfaces_background_task_failure(monkeypatch) -> None:
+	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
+	monkeypatch.setattr(api_module.OpenRouterAPI, "_prompt_model", _failing_prompt_model)
+
+	api = api_module.OpenRouterAPI(api_key="test-api-key")
+	chunks: list[dict[str, object]] = []
+
+	with pytest.raises(RuntimeError, match="producer exploded"):
+		async for chunk in api.prompt_models_concurrent(
+			["alpha/one"],
+			[{"role": "user", "content": "Compare models."}],
+		):
+			chunks.append(chunk)
+
+	assert chunks == [
+		{
+			"slot": 0,
+			"model": "alpha/one",
+			"delta": "first chunk",
+		}
+	]
