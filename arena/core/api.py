@@ -362,23 +362,38 @@ class OpenRouterAPI:
 			# Start all streams as concurrent tasks
 			tasks = [asyncio.create_task(producer(gen)) for gen in generators]
 
-			# While any task is still running or the queue isn't empty
-			while tasks or not queue.empty():
-				try:
-					# Don't wait forever if everything is done
-					if not tasks and queue.empty():
-						break
-
-					# Get chunk from queue with a small timeout to check task status
+			try:
+				# Keep draining queued chunks until all producers finish or one fails.
+				while True:
 					try:
 						chunk = await asyncio.wait_for(queue.get(), timeout=0.1)
 						yield chunk
 						queue.task_done()
 					except asyncio.TimeoutError:
 						pass
-				finally:
-					# Clean up completed tasks
-					tasks = [t for t in tasks if not t.done()]
+
+					finished_tasks = [task for task in tasks if task.done()]
+					for task in finished_tasks:
+						if task.cancelled():
+							continue
+
+						task_exception = task.exception()
+						if task_exception is not None:
+							for remaining_task in tasks:
+								if not remaining_task.done():
+									remaining_task.cancel()
+							await asyncio.gather(*tasks, return_exceptions=True)
+							raise task_exception
+
+					tasks = [task for task in tasks if not task.done()]
+					if not tasks and queue.empty():
+						break
+			finally:
+				for task in tasks:
+					if not task.done():
+						task.cancel()
+				if tasks:
+					await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def main():

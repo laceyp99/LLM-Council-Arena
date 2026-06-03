@@ -1,4 +1,5 @@
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,7 @@ DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
 	default_model_ids=DEFAULT_MODEL_IDS,
 	panel_count=PANEL_COUNT,
 )
+GENERATION_INTERRUPTED_MESSAGE = "Generation stopped before this round could finish."
 
 
 def _timestamp_slug(iso_timestamp: str | None) -> str:
@@ -331,28 +333,31 @@ def _write_round_logs(round_state: dict[str, Any]) -> str:
 	session_dir_name = f"{_timestamp_slug(str(round_state.get('submitted_at') or ''))}_{round_id}"
 	session_dir = SESSION_LOGS_DIR / session_dir_name
 	session_dir.mkdir(parents=True, exist_ok=True)
-
-	_write_json_file(session_dir / "round.json", _build_round_payload(round_state))
-	_write_json_file(
-		session_dir / "vote.json",
-		{
-			"schema_version": 1,
-			"round_id": round_id,
-			"submitted_at": round_state.get("submitted_at"),
-			"vote_sequence": {
-				"first_choice": round_state.get("first_choice"),
-				"second_choice": round_state.get("second_choice"),
-				"third_choice": round_state.get("third_choice"),
-			},
-			"display_mapping": _display_mapping_from_state(round_state),
-			"ranking": _ranking_details_from_state(round_state),
-		},
-	)
-	_write_json_file(session_dir / "histories.json", _build_histories_payload(round_state))
-	_write_json_file(session_dir / "generation.json", _build_generation_payload(round_state))
-
 	session_dir_relative = session_dir.relative_to(APP_DIR).as_posix()
-	_update_meta_log(round_state, session_dir_relative)
+
+	try:
+		_write_json_file(session_dir / "round.json", _build_round_payload(round_state))
+		_write_json_file(
+			session_dir / "vote.json",
+			{
+				"schema_version": 1,
+				"round_id": round_id,
+				"submitted_at": round_state.get("submitted_at"),
+				"vote_sequence": {
+					"first_choice": round_state.get("first_choice"),
+					"second_choice": round_state.get("second_choice"),
+					"third_choice": round_state.get("third_choice"),
+				},
+				"display_mapping": _display_mapping_from_state(round_state),
+				"ranking": _ranking_details_from_state(round_state),
+			},
+		)
+		_write_json_file(session_dir / "histories.json", _build_histories_payload(round_state))
+		_write_json_file(session_dir / "generation.json", _build_generation_payload(round_state))
+		_update_meta_log(round_state, session_dir_relative)
+	except Exception:
+		shutil.rmtree(session_dir, ignore_errors=True)
+		raise
 	return session_dir_relative
 
 
@@ -453,19 +458,34 @@ def submit_vote(round_state: dict[str, Any] | None):
 		"submitted_at": datetime.now(timezone.utc).isoformat(),
 		"vote_stage": "submitted",
 		"log_warning": None,
+		"submission_status": None,
+		"submission_message": None,
 	}
 
 	try:
 		session_dir = _write_round_logs(candidate_state)
-	except RuntimeError:
-		return _submit_vote_outputs(current_state)
+	except (RuntimeError, OSError) as exc:
+		failed_state = {
+			**current_state,
+			"log_warning": str(exc),
+			"submission_status": "error",
+			"submission_message": f"Vote could not be saved: {exc}",
+		}
+		return _submit_vote_outputs(failed_state)
 
 	candidate_state["session_dir"] = session_dir
 
 	try:
 		_append_vote_record(_build_vote_record(candidate_state, session_dir))
-	except RuntimeError as exc:
+	except (RuntimeError, OSError) as exc:
 		candidate_state["log_warning"] = str(exc)
+		candidate_state["submission_status"] = "error"
+		candidate_state["submission_message"] = (
+			f"Vote submitted, but saving the vote record failed: {exc}"
+		)
+	else:
+		candidate_state["submission_status"] = "success"
+		candidate_state["submission_message"] = "Vote submitted and saved successfully."
 
 	return _submit_vote_outputs(candidate_state)
 
@@ -741,26 +761,73 @@ async def stream_all_models(
 		for slot, model_id in enumerate(model_ids)
 	]
 
-	async for chunk in api.prompt_models_concurrent(
-		prompt_requests,
-		message_payload,
-		reasoning=DEFAULT_REASONING_SETTINGS,
-	):
-		slot = _apply_stream_chunk(
+	try:
+		async for chunk in api.prompt_models_concurrent(
+			prompt_requests,
+			message_payload,
+			reasoning=DEFAULT_REASONING_SETTINGS,
+		):
+			slot = _apply_stream_chunk(
+				round_state,
+				histories,
+				assistant_message_indices,
+				reasoning_message_indices,
+				completed_slots,
+				errored_slots,
+				chunk,
+			)
+			if slot is None:
+				continue
+			yield _streaming_outputs(
+				chatbot_updates=_targeted_chatbot_value_updates(
+					histories, display_order, slot=slot
+				),
+				round_state=round_state,
+			)
+	except Exception:
+		for slot in range(PANEL_COUNT):
+			if slot in completed_slots or slot in errored_slots:
+				continue
+			errored_slots.add(slot)
+			round_state["slot_logs"][slot]["status"] = "error"
+			round_state["slot_logs"][slot]["error"] = GENERATION_INTERRUPTED_MESSAGE
+			histories[slot].append(
+				{
+					"role": "assistant",
+					"content": f"[Error] {GENERATION_INTERRUPTED_MESSAGE}",
+				}
+			)
+			reasoning_index = reasoning_message_indices[slot]
+			if reasoning_index is not None:
+				reasoning_content = _message_text_content(histories[slot][reasoning_index]).strip()
+				if not reasoning_content:
+					reasoning_content = (
+						"_Reasoning trace interrupted before the round could finish._"
+					)
+				reasoning_message_indices[slot], _ = _upsert_reasoning_message(
+					history=histories[slot],
+					message_index=reasoning_index,
+					slot=slot,
+					content=reasoning_content,
+					pending=False,
+					assistant_message_index=assistant_message_indices[slot],
+				)
+		_finalize_generation_state(
 			round_state,
 			histories,
 			assistant_message_indices,
 			reasoning_message_indices,
 			completed_slots,
 			errored_slots,
-			chunk,
 		)
-		if slot is None:
-			continue
 		yield _streaming_outputs(
-			chatbot_updates=_targeted_chatbot_value_updates(histories, display_order, slot=slot),
+			chatbot_updates=_targeted_chatbot_value_updates(
+				histories, display_order, update_all=True
+			),
 			round_state=round_state,
+			vote_updates=_vote_ui_updates(round_state),
 		)
+		return
 
 	_finalize_generation_state(
 		round_state,
@@ -860,6 +927,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 				with gr.Row():
 					vote_reset_btn = gr.Button("Reset Vote", interactive=False)
 					vote_submit_btn = gr.Button("Submit Vote", interactive=False)
+				vote_status_banner = gr.HTML(value="", visible=False)
 
 		with gr.Tab("Leaderboard"):
 			leaderboard_summary_md = gr.Markdown(initial_leaderboard_summary)
@@ -881,6 +949,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		vote_response_c_btn,
 		vote_reset_btn,
 		vote_submit_btn,
+		vote_status_banner,
 	]
 	submit_inputs = [user_input, system_prompt, panel_1_model, panel_2_model, panel_3_model]
 
@@ -898,6 +967,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	panel_2_provider.change(
@@ -914,6 +984,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	panel_3_provider.change(
@@ -930,6 +1001,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 
@@ -946,6 +1018,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	panel_2_model.change(
@@ -961,6 +1034,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	panel_3_model.change(
@@ -976,6 +1050,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 
@@ -1001,6 +1076,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	vote_response_b_btn.click(
@@ -1013,6 +1089,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	vote_response_c_btn.click(
@@ -1025,6 +1102,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	vote_reset_btn.click(
@@ -1037,6 +1115,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	vote_submit_btn.click(
@@ -1052,6 +1131,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 			leaderboard_summary_md,
 			leaderboard_table,
 		],

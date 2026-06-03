@@ -2,6 +2,7 @@ import gradio as gr
 import pytest
 
 from arena import app as app_module
+from arena.core import api as api_module
 
 
 def _stub_ui_helpers(monkeypatch) -> None:
@@ -58,6 +59,27 @@ def _fake_streaming_api(monkeypatch, chunks: list[dict[str, object]]) -> list[di
 
 	monkeypatch.setattr(app_module, "OpenRouterAPI", FakeOpenRouterAPI)
 	return requests
+
+
+class _NoopAsyncClient:
+	def __init__(self, *args, **kwargs) -> None:
+		self.args = args
+		self.kwargs = kwargs
+
+	async def __aenter__(self):
+		return self
+
+	async def __aexit__(self, exc_type, exc, tb) -> None:
+		return None
+
+
+async def _failing_prompt_model(self, client, request, messages, **kwargs):
+	yield {
+		"slot": request["slot"],
+		"model": request["model"],
+		"delta": "first chunk",
+	}
+	raise RuntimeError("producer exploded")
 
 
 def _build_generation_context() -> tuple[
@@ -263,6 +285,27 @@ def test_finalize_generation_state_marks_vote_unavailable_without_completions() 
 
 
 @pytest.mark.anyio
+async def test_stream_all_models_starts_new_round_with_cleared_submission_status(
+	monkeypatch,
+) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", None)
+
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+	)
+
+	initial_round_state = outputs[0][4]
+
+	assert initial_round_state["submission_status"] is None
+	assert initial_round_state["submission_message"] is None
+
+
+@pytest.mark.anyio
 async def test_stream_all_models_blocks_when_panel_has_no_model_selected(monkeypatch) -> None:
 	_stub_ui_helpers(monkeypatch)
 
@@ -418,3 +461,35 @@ async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(mon
 	assert final_round_state["errored_slots"] == [1]
 	assert final_round_state["slot_logs"][1]["status"] == "error"
 	assert final_round_state["slot_logs"][1]["error"] == "provider failure"
+
+
+@pytest.mark.anyio
+async def test_stream_all_models_recovers_from_background_stream_failure(monkeypatch) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
+	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
+	monkeypatch.setattr(app_module.OpenRouterAPI, "_prompt_model", _failing_prompt_model)
+
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+	)
+
+	final_round_state = outputs[-1][4]
+
+	assert len(outputs) >= 2
+	assert final_round_state["generation_completed_at"] is not None
+	assert final_round_state["ready_for_vote"] is False
+	assert final_round_state["vote_stage"] == "unavailable"
+	assert final_round_state["completed_slots"] == []
+	assert final_round_state["errored_slots"] == [0, 1, 2]
+	assert final_round_state["slot_logs"][0]["final_response"] == "first chunk"
+	assert final_round_state["slot_logs"][0]["status"] == "error"
+	assert (
+		final_round_state["slot_logs"][0]["error"]
+		== "Generation stopped before this round could finish."
+	)

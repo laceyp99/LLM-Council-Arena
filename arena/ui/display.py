@@ -325,8 +325,8 @@ def _targeted_chatbot_value_updates(
 	return tuple(updates)
 
 
-def _skip_vote_updates() -> tuple[Any, Any, Any, Any, Any]:
-	return tuple(gr.skip() for _ in range(5))
+def _skip_vote_updates() -> tuple[Any, Any, Any, Any, Any, Any]:
+	return tuple(gr.skip() for _ in range(6))
 
 
 def _streaming_outputs(
@@ -334,7 +334,7 @@ def _streaming_outputs(
 	user_input: Any | None = None,
 	chatbot_updates: tuple[Any, Any, Any] | None = None,
 	round_state: dict[str, Any] | None = None,
-	vote_updates: tuple[Any, Any, Any, Any, Any] | None = None,
+	vote_updates: tuple[Any, Any, Any, Any, Any, Any] | None = None,
 ) -> tuple[Any, ...]:
 	return (
 		gr.skip() if user_input is None else user_input,
