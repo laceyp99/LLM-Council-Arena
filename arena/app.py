@@ -458,19 +458,34 @@ def submit_vote(round_state: dict[str, Any] | None):
 		"submitted_at": datetime.now(timezone.utc).isoformat(),
 		"vote_stage": "submitted",
 		"log_warning": None,
+		"submission_status": None,
+		"submission_message": None,
 	}
 
 	try:
 		session_dir = _write_round_logs(candidate_state)
-	except RuntimeError:
-		return _submit_vote_outputs(current_state)
+	except (RuntimeError, OSError) as exc:
+		failed_state = {
+			**current_state,
+			"log_warning": str(exc),
+			"submission_status": "error",
+			"submission_message": f"Vote could not be saved: {exc}",
+		}
+		return _submit_vote_outputs(failed_state)
 
 	candidate_state["session_dir"] = session_dir
 
 	try:
 		_append_vote_record(_build_vote_record(candidate_state, session_dir))
-	except RuntimeError as exc:
+	except (RuntimeError, OSError) as exc:
 		candidate_state["log_warning"] = str(exc)
+		candidate_state["submission_status"] = "error"
+		candidate_state["submission_message"] = (
+			f"Vote submitted, but saving the vote record failed: {exc}"
+		)
+	else:
+		candidate_state["submission_status"] = "success"
+		candidate_state["submission_message"] = "Vote submitted and saved successfully."
 
 	return _submit_vote_outputs(candidate_state)
 
@@ -910,6 +925,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 				with gr.Row():
 					vote_reset_btn = gr.Button("Reset Vote", interactive=False)
 					vote_submit_btn = gr.Button("Submit Vote", interactive=False)
+				vote_status_banner = gr.Markdown(value="", visible=False)
 
 		with gr.Tab("Leaderboard"):
 			leaderboard_summary_md = gr.Markdown(initial_leaderboard_summary)
@@ -931,6 +947,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		vote_response_c_btn,
 		vote_reset_btn,
 		vote_submit_btn,
+		vote_status_banner,
 	]
 	submit_inputs = [user_input, system_prompt, panel_1_model, panel_2_model, panel_3_model]
 
@@ -948,6 +965,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	panel_2_provider.change(
@@ -964,6 +982,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	panel_3_provider.change(
@@ -980,6 +999,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 
@@ -996,6 +1016,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	panel_2_model.change(
@@ -1011,6 +1032,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	panel_3_model.change(
@@ -1026,6 +1048,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 
@@ -1051,6 +1074,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	vote_response_b_btn.click(
@@ -1063,6 +1087,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	vote_response_c_btn.click(
@@ -1075,6 +1100,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	vote_reset_btn.click(
@@ -1087,6 +1113,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 		],
 	)
 	vote_submit_btn.click(
@@ -1102,6 +1129,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_response_c_btn,
 			vote_reset_btn,
 			vote_submit_btn,
+			vote_status_banner,
 			leaderboard_summary_md,
 			leaderboard_table,
 		],

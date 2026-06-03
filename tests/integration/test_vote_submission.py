@@ -123,13 +123,19 @@ def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 
 	outputs = app_module.submit_vote(round_state)
 	submitted_state = outputs[0]
+	status_update = outputs[9]
 	session_file_paths = [
 		path for path in written_paths if app_module.SESSION_LOGS_DIR in path.parents
 	]
 	session_dirs = {path.parent for path in session_file_paths}
 	session_dir = session_dirs.pop()
 
-	assert submitted_state == round_state
+	assert submitted_state["submitted"] is False
+	assert submitted_state["submission_status"] == "error"
+	assert "meta store unavailable" in submitted_state["submission_message"]
+	assert isinstance(status_update, gr.Markdown)
+	assert status_update.visible is True
+	assert "meta store unavailable" in status_update.value
 	assert append_calls == []
 	assert not app_module.VOTES_FILE.exists()
 	assert sorted(path.name for path in session_file_paths) == [

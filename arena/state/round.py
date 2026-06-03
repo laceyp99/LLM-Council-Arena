@@ -95,6 +95,8 @@ def _empty_round_state() -> dict[str, Any]:
 		"third_choice": None,
 		"session_dir": None,
 		"log_warning": None,
+		"submission_status": None,
+		"submission_message": None,
 	}
 
 
@@ -130,6 +132,8 @@ def _build_round_state(
 		"third_choice": None,
 		"session_dir": None,
 		"log_warning": None,
+		"submission_status": None,
+		"submission_message": None,
 	}
 
 

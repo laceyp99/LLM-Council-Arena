@@ -133,11 +133,17 @@ def _vote_controls_updates(
 	)
 
 
+def _submission_status_update(round_state: dict[str, Any] | None) -> gr.Markdown:
+	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
+	message = str(current_state.get("submission_message") or "").strip()
+	return gr.Markdown(value=message, visible=bool(message))
+
+
 def _vote_ui_updates(
 	round_state: dict[str, Any] | None,
 ) -> Any:
 	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
-	return _vote_controls_updates(current_state)
+	return (*_vote_controls_updates(current_state), _submission_status_update(current_state))
 
 
 def _vote_response(round_state: dict[str, Any] | None, response_label: str):
