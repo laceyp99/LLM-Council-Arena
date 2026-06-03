@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from arena.core.api import (
@@ -102,6 +103,41 @@ def test_normalize_model_catalog_filters_non_text_models_and_sorts_results() -> 
 	assert [entry["model_id"] for entry in normalized] == ["alpha/chat-model", "beta/plain_text"]
 	assert normalized[1]["provider_label"] == "Beta"
 	assert normalized[1]["model_label"] == "plain text"
+
+
+def test_get_key_info_fetches_openrouter_key_metadata(monkeypatch) -> None:
+	requests: list[dict[str, object]] = []
+
+	class FakeResponse:
+		def raise_for_status(self) -> None:
+			requests.append({"raised": True})
+
+		def json(self) -> dict[str, object]:
+			return {"data": {"label": "test key"}}
+
+	class FakeClient:
+		def __enter__(self) -> "FakeClient":
+			return self
+
+		def __exit__(self, exc_type, exc, traceback) -> None:
+			return None
+
+		def get(self, url: str, headers: dict[str, str]) -> FakeResponse:
+			requests.append({"url": url, "headers": headers})
+			return FakeResponse()
+
+	monkeypatch.setattr(httpx, "Client", FakeClient)
+
+	api = OpenRouterAPI(api_key="test-api-key")
+
+	assert api.get_key_info() == {"data": {"label": "test key"}}
+	assert requests == [
+		{
+			"url": "https://openrouter.ai/api/v1/key",
+			"headers": api.headers,
+		},
+		{"raised": True},
+	]
 
 
 def test_normalize_prompt_requests_accepts_strings_and_dicts() -> None:

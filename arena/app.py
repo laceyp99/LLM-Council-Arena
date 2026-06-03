@@ -379,6 +379,10 @@ def _resolve_model_for_provider(provider_key: str, model_id: str | None = None) 
 	)
 
 
+def _selectors_interactive() -> bool:
+	return not MODEL_CATALOG_STATUS.lower().startswith("warning:")
+
+
 def _build_messages(user_text: str, system_prompt: str) -> list[dict[str, str]]:
 	resolved_system_prompt = (system_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
 	return [
@@ -428,7 +432,11 @@ def _submit_vote_outputs(
 def update_panel_provider(provider_key: str):
 	resolved_model_id = _resolve_model_for_provider(provider_key)
 	return (
-		gr.Dropdown(choices=_model_choices_for_provider(provider_key), value=resolved_model_id),
+		gr.Dropdown(
+			choices=_model_choices_for_provider(provider_key),
+			value=resolved_model_id,
+			interactive=_selectors_interactive(),
+		),
 		*_reset_arena_outputs(),
 	)
 
@@ -864,11 +872,13 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						label="Provider",
 						choices=PROVIDER_CHOICES,
 						value=default_panel_providers[0],
+						interactive=_selectors_interactive(),
 					)
 					panel_1_model = gr.Dropdown(
 						label="Model",
 						choices=_model_choices_for_provider(default_panel_providers[0]),
 						value=DEFAULT_PANEL_MODEL_IDS[0],
+						interactive=_selectors_interactive(),
 					)
 
 				with gr.Column(scale=1):
@@ -876,11 +886,13 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						label="Provider",
 						choices=PROVIDER_CHOICES,
 						value=default_panel_providers[1],
+						interactive=_selectors_interactive(),
 					)
 					panel_2_model = gr.Dropdown(
 						label="Model",
 						choices=_model_choices_for_provider(default_panel_providers[1]),
 						value=DEFAULT_PANEL_MODEL_IDS[1],
+						interactive=_selectors_interactive(),
 					)
 
 				with gr.Column(scale=1):
@@ -888,11 +900,13 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						label="Provider",
 						choices=PROVIDER_CHOICES,
 						value=default_panel_providers[2],
+						interactive=_selectors_interactive(),
 					)
 					panel_3_model = gr.Dropdown(
 						label="Model",
 						choices=_model_choices_for_provider(default_panel_providers[2]),
 						value=DEFAULT_PANEL_MODEL_IDS[2],
+						interactive=_selectors_interactive(),
 					)
 
 			with gr.Accordion("System Prompt", open=False):

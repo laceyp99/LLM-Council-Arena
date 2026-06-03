@@ -124,15 +124,16 @@ def test_startup_keeps_model_selectors_active_when_live_catalog_loads() -> None:
 	assert selector_config["model_interactive"] is not False
 
 
-def test_startup_disables_model_selectors_when_catalog_falls_back() -> None:
+def test_startup_disables_model_selectors_when_api_key_validation_fails() -> None:
 	selector_config = _startup_selector_config(
 		catalog_status=(
-			"Warning: could not load the live OpenRouter catalog (upstream unavailable). "
+			"Warning: could not validate OPENROUTER_API_KEY (unauthorized). "
 			"Using the fallback model list."
 		),
 		api_key="test-api-key",
 	)
 
 	assert "warning" in str(selector_config["status"]).lower()
+	assert "validate openrouter_api_key" in str(selector_config["status"]).lower()
 	assert selector_config["provider_interactive"] is False
 	assert selector_config["model_interactive"] is False
