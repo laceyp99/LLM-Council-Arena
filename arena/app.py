@@ -1,6 +1,7 @@
 import json
 import shutil
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -379,6 +380,31 @@ def _resolve_model_for_provider(provider_key: str, model_id: str | None = None) 
 	)
 
 
+def _selectors_interactive() -> bool:
+	return not MODEL_CATALOG_STATUS.lower().startswith("warning:")
+
+
+def _openrouter_status_banner() -> gr.HTML:
+	if _selectors_interactive():
+		return gr.HTML(value="", visible=False)
+
+	message = (
+		"OpenRouter is not ready. Fix OPENROUTER_API_KEY in your environment variables, "
+		"then restart the app and retry."
+	)
+
+	return gr.HTML(
+		value=(
+			'<div style="'
+			"margin-bottom: 1rem; padding: 1rem 1.25rem; border-radius: 14px; "
+			"border: 2px solid #dc2626; background: #fee2e2; color: #7f1d1d; "
+			"text-align: center; font-size: 1.05rem; font-weight: 700; line-height: 1.5;"
+			f'">{escape(message)}</div>'
+		),
+		visible=True,
+	)
+
+
 def _build_messages(user_text: str, system_prompt: str) -> list[dict[str, str]]:
 	resolved_system_prompt = (system_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
 	return [
@@ -428,7 +454,11 @@ def _submit_vote_outputs(
 def update_panel_provider(provider_key: str):
 	resolved_model_id = _resolve_model_for_provider(provider_key)
 	return (
-		gr.Dropdown(choices=_model_choices_for_provider(provider_key), value=resolved_model_id),
+		gr.Dropdown(
+			choices=_model_choices_for_provider(provider_key),
+			value=resolved_model_id,
+			interactive=_selectors_interactive(),
+		),
 		*_reset_arena_outputs(),
 	)
 
@@ -858,17 +888,21 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 
 	with gr.Tabs():
 		with gr.Tab("Arena"):
+			openrouter_status_banner = _openrouter_status_banner()
+
 			with gr.Row():
 				with gr.Column(scale=1):
 					panel_1_provider = gr.Dropdown(
 						label="Provider",
 						choices=PROVIDER_CHOICES,
 						value=default_panel_providers[0],
+						interactive=_selectors_interactive(),
 					)
 					panel_1_model = gr.Dropdown(
 						label="Model",
 						choices=_model_choices_for_provider(default_panel_providers[0]),
 						value=DEFAULT_PANEL_MODEL_IDS[0],
+						interactive=_selectors_interactive(),
 					)
 
 				with gr.Column(scale=1):
@@ -876,11 +910,13 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						label="Provider",
 						choices=PROVIDER_CHOICES,
 						value=default_panel_providers[1],
+						interactive=_selectors_interactive(),
 					)
 					panel_2_model = gr.Dropdown(
 						label="Model",
 						choices=_model_choices_for_provider(default_panel_providers[1]),
 						value=DEFAULT_PANEL_MODEL_IDS[1],
+						interactive=_selectors_interactive(),
 					)
 
 				with gr.Column(scale=1):
@@ -888,11 +924,13 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						label="Provider",
 						choices=PROVIDER_CHOICES,
 						value=default_panel_providers[2],
+						interactive=_selectors_interactive(),
 					)
 					panel_3_model = gr.Dropdown(
 						label="Model",
 						choices=_model_choices_for_provider(default_panel_providers[2]),
 						value=DEFAULT_PANEL_MODEL_IDS[2],
+						interactive=_selectors_interactive(),
 					)
 
 			with gr.Accordion("System Prompt", open=False):
@@ -907,7 +945,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 				placeholder="Type your prompt and click Send...",
 				lines=3,
 			)
-			send_btn = gr.Button("Send")
+			send_btn = gr.Button("Send", interactive=_selectors_interactive())
 			round_state = gr.State(_empty_round_state())
 
 			with gr.Row():

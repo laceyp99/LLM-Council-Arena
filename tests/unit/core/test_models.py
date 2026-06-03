@@ -122,6 +122,9 @@ def test_load_model_catalog_with_api_key_returns_live_catalog(monkeypatch) -> No
 			self.site_url = site_url
 			self.site_name = site_name
 
+		def get_key_info(self) -> dict[str, object]:
+			return {"label": "test key"}
+
 		def get_normalized_text_models(self) -> list[dict[str, str]]:
 			return [
 				{
@@ -155,10 +158,13 @@ def test_load_model_catalog_with_api_key_returns_live_catalog(monkeypatch) -> No
 	assert api_key == "test-api-key"
 
 
-def test_load_model_catalog_with_api_key_falls_back_on_error(monkeypatch) -> None:
+def test_load_model_catalog_with_api_key_falls_back_on_catalog_error(monkeypatch) -> None:
 	class FakeOpenRouterAPI:
 		def __init__(self, api_key: str, site_url: str, site_name: str) -> None:
 			self.api_key = api_key
+
+		def get_key_info(self) -> dict[str, object]:
+			return {"label": "test key"}
 
 		def get_normalized_text_models(self) -> list[dict[str, str]]:
 			raise RuntimeError("upstream unavailable")
@@ -174,4 +180,29 @@ def test_load_model_catalog_with_api_key_falls_back_on_error(monkeypatch) -> Non
 
 	assert catalog == _fallback_model_catalog()
 	assert "could not load the live openrouter catalog" in status.lower()
+	assert api_key == "test-api-key"
+
+
+def test_load_model_catalog_with_api_key_falls_back_on_key_validation_error(monkeypatch) -> None:
+	class FakeOpenRouterAPI:
+		def __init__(self, api_key: str, site_url: str, site_name: str) -> None:
+			self.api_key = api_key
+
+		def get_key_info(self) -> dict[str, object]:
+			raise RuntimeError("invalid key")
+
+		def get_normalized_text_models(self) -> list[dict[str, str]]:
+			raise AssertionError("catalog should not load when key validation fails")
+
+	monkeypatch.setattr(model_module, "load_dotenv", lambda: None)
+	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
+	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
+
+	catalog, status, api_key = _load_model_catalog(
+		site_url="http://localhost:7860",
+		site_name="LLM Council Arena",
+	)
+
+	assert catalog == _fallback_model_catalog()
+	assert "could not validate openrouter_api_key" in status.lower()
 	assert api_key == "test-api-key"

@@ -40,11 +40,20 @@ def _load_model_catalog(
 	if not api_key:
 		return (
 			_fallback_model_catalog(),
-			"Warning: OPENROUTER_API_KEY is missing. Using the fallback model list until the live OpenRouter catalog can be loaded.",
+			"Warning: OPENROUTER_API_KEY is missing. Using the fallback model list until an API key is configured.",
 			api_key,
 		)
 
 	api = OpenRouterAPI(api_key=api_key, site_url=site_url, site_name=site_name)
+
+	try:
+		api.get_key_info()
+	except Exception as exc:
+		return (
+			_fallback_model_catalog(),
+			f"Warning: could not validate OPENROUTER_API_KEY ({exc}). Using the fallback model list.",
+			api_key,
+		)
 
 	try:
 		catalog = api.get_normalized_text_models()

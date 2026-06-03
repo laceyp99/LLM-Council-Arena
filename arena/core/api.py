@@ -120,6 +120,17 @@ class OpenRouterAPI:
 			response.raise_for_status()
 			return response.json().get("data", [])
 
+	def get_key_info(self) -> dict[str, Any]:
+		"""Synchronously fetch metadata for the configured OpenRouter API key."""
+		with httpx.Client() as client:
+			response = client.get(
+				f"{self.base_url}/key",
+				headers=self.headers,
+			)
+			response.raise_for_status()
+			payload = response.json()
+			return payload if isinstance(payload, dict) else {}
+
 	@staticmethod
 	def normalize_model_catalog(models: list[dict]) -> list[dict]:
 		"""Return text-capable models grouped by provider-friendly metadata."""
