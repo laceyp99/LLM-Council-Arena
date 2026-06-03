@@ -927,7 +927,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 				with gr.Row():
 					vote_reset_btn = gr.Button("Reset Vote", interactive=False)
 					vote_submit_btn = gr.Button("Submit Vote", interactive=False)
-				vote_status_banner = gr.Markdown(value="", visible=False)
+				vote_status_banner = gr.HTML(value="", visible=False)
 
 		with gr.Tab("Leaderboard"):
 			leaderboard_summary_md = gr.Markdown(initial_leaderboard_summary)

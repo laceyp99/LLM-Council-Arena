@@ -86,9 +86,12 @@ def test_submit_vote_writes_round_artifacts_and_vote_record(monkeypatch, tmp_pat
 	assert session_dir.joinpath("vote.json").exists()
 	assert session_dir.joinpath("histories.json").exists()
 	assert session_dir.joinpath("generation.json").exists()
-	assert isinstance(status_update, gr.Markdown)
+	assert isinstance(status_update, gr.HTML)
 	assert status_update.visible is True
-	assert status_update.value == "Vote submitted and saved successfully."
+	assert "Vote submitted and saved successfully." in status_update.value
+	assert "background: #dcfce7" in status_update.value
+	assert "color: #14532d" in status_update.value
+	assert "text-align: center" in status_update.value
 	assert outputs[10].startswith("## Leaderboard")
 	assert outputs[11][0] == [1, "Label for alpha/one", "alpha", 1, 1, "100%"]
 	assert len(outputs[11]) == 3
@@ -133,9 +136,11 @@ def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 	assert submitted_state["submitted"] is False
 	assert submitted_state["submission_status"] == "error"
 	assert "meta store unavailable" in submitted_state["submission_message"]
-	assert isinstance(status_update, gr.Markdown)
+	assert isinstance(status_update, gr.HTML)
 	assert status_update.visible is True
 	assert "meta store unavailable" in status_update.value
+	assert "background: #fee2e2" in status_update.value
+	assert "color: #7f1d1d" in status_update.value
 	assert append_calls == []
 	assert not app_module.VOTES_FILE.exists()
 	assert sorted(path.name for path in session_file_paths) == [
@@ -166,9 +171,11 @@ def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp
 	assert submitted_state["log_warning"] == "disk full"
 	assert submitted_state["submission_status"] == "error"
 	assert "disk full" in submitted_state["submission_message"]
-	assert isinstance(status_update, gr.Markdown)
+	assert isinstance(status_update, gr.HTML)
 	assert status_update.visible is True
 	assert "disk full" in status_update.value
+	assert "background: #fee2e2" in status_update.value
+	assert "color: #7f1d1d" in status_update.value
 	assert (tmp_path / str(submitted_state["session_dir"]) / "round.json").exists()
 
 
@@ -196,9 +203,11 @@ def test_submit_vote_returns_current_state_when_round_log_write_fails(
 	assert outputs[0]["submitted"] is False
 	assert outputs[0]["submission_status"] == "error"
 	assert "log store unavailable" in outputs[0]["submission_message"]
-	assert isinstance(status_update, gr.Markdown)
+	assert isinstance(status_update, gr.HTML)
 	assert status_update.visible is True
 	assert "log store unavailable" in status_update.value
+	assert "background: #fee2e2" in status_update.value
+	assert "color: #7f1d1d" in status_update.value
 	assert append_calls == []
 	assert not app_module.VOTES_FILE.exists()
 	assert not app_module.SESSION_LOGS_DIR.exists()

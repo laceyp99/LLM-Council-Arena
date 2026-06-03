@@ -1,3 +1,4 @@
+from html import escape
 from typing import Any
 
 import gradio as gr
@@ -133,10 +134,26 @@ def _vote_controls_updates(
 	)
 
 
-def _submission_status_update(round_state: dict[str, Any] | None) -> gr.Markdown:
+def _submission_status_update(round_state: dict[str, Any] | None) -> gr.HTML:
 	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
+	status = str(current_state.get("submission_status") or "").strip()
 	message = str(current_state.get("submission_message") or "").strip()
-	return gr.Markdown(value=message, visible=bool(message))
+	if not message:
+		return gr.HTML(value="", visible=False)
+
+	background = "#dcfce7" if status == "success" else "#fee2e2"
+	border = "#16a34a" if status == "success" else "#dc2626"
+	text_color = "#14532d" if status == "success" else "#7f1d1d"
+	return gr.HTML(
+		value=(
+			'<div style="'
+			f"margin-top: 1rem; padding: 1rem 1.25rem; border-radius: 14px; "
+			f"border: 2px solid {border}; background: {background}; color: {text_color}; "
+			"text-align: center; font-size: 1.05rem; font-weight: 700; line-height: 1.5;"
+			f'">{escape(message)}</div>'
+		),
+		visible=True,
+	)
 
 
 def _vote_ui_updates(
