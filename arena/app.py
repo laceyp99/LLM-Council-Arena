@@ -392,9 +392,6 @@ def _openrouter_status_banner() -> gr.HTML:
 		"OpenRouter is not ready. Fix OPENROUTER_API_KEY in your environment variables, "
 		"then restart the app and retry."
 	)
-	status_detail = MODEL_CATALOG_STATUS.strip()
-	if status_detail:
-		message = f"{message} {status_detail}"
 
 	return gr.HTML(
 		value=(
