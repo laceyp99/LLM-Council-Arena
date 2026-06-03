@@ -86,6 +86,7 @@ DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
 	default_model_ids=DEFAULT_MODEL_IDS,
 	panel_count=PANEL_COUNT,
 )
+GENERATION_INTERRUPTED_MESSAGE = "Generation stopped before this round could finish."
 
 
 def _timestamp_slug(iso_timestamp: str | None) -> str:
@@ -745,26 +746,71 @@ async def stream_all_models(
 		for slot, model_id in enumerate(model_ids)
 	]
 
-	async for chunk in api.prompt_models_concurrent(
-		prompt_requests,
-		message_payload,
-		reasoning=DEFAULT_REASONING_SETTINGS,
-	):
-		slot = _apply_stream_chunk(
+	try:
+		async for chunk in api.prompt_models_concurrent(
+			prompt_requests,
+			message_payload,
+			reasoning=DEFAULT_REASONING_SETTINGS,
+		):
+			slot = _apply_stream_chunk(
+				round_state,
+				histories,
+				assistant_message_indices,
+				reasoning_message_indices,
+				completed_slots,
+				errored_slots,
+				chunk,
+			)
+			if slot is None:
+				continue
+			yield _streaming_outputs(
+				chatbot_updates=_targeted_chatbot_value_updates(
+					histories, display_order, slot=slot
+				),
+				round_state=round_state,
+			)
+	except Exception:
+		for slot in range(PANEL_COUNT):
+			if slot in completed_slots or slot in errored_slots:
+				continue
+			errored_slots.add(slot)
+			round_state["slot_logs"][slot]["status"] = "error"
+			round_state["slot_logs"][slot]["error"] = GENERATION_INTERRUPTED_MESSAGE
+			histories[slot].append(
+				{
+					"role": "assistant",
+					"content": f"[Error] {GENERATION_INTERRUPTED_MESSAGE}",
+				}
+			)
+			reasoning_index = reasoning_message_indices[slot]
+			if reasoning_index is not None:
+				reasoning_content = _message_text_content(histories[slot][reasoning_index]).strip()
+				if not reasoning_content:
+					reasoning_content = "_Reasoning trace interrupted before the round could finish._"
+				reasoning_message_indices[slot], _ = _upsert_reasoning_message(
+					history=histories[slot],
+					message_index=reasoning_index,
+					slot=slot,
+					content=reasoning_content,
+					pending=False,
+					assistant_message_index=assistant_message_indices[slot],
+				)
+		_finalize_generation_state(
 			round_state,
 			histories,
 			assistant_message_indices,
 			reasoning_message_indices,
 			completed_slots,
 			errored_slots,
-			chunk,
 		)
-		if slot is None:
-			continue
 		yield _streaming_outputs(
-			chatbot_updates=_targeted_chatbot_value_updates(histories, display_order, slot=slot),
+			chatbot_updates=_targeted_chatbot_value_updates(
+				histories, display_order, update_all=True
+			),
 			round_state=round_state,
+			vote_updates=_vote_ui_updates(round_state),
 		)
+		return
 
 	_finalize_generation_state(
 		round_state,
