@@ -56,6 +56,9 @@ def _startup_selector_config(
 					"status": app_module.MODEL_CATALOG_STATUS,
 					"provider_interactive": app_module.panel_1_provider.get_config().get("interactive"),
 					"model_interactive": app_module.panel_1_model.get_config().get("interactive"),
+					"send_interactive": app_module.send_btn.get_config().get("interactive"),
+					"readiness_banner_visible": app_module.openrouter_status_banner.get_config().get("visible"),
+					"readiness_banner_value": app_module.openrouter_status_banner.get_config().get("value"),
 				},
 				default=str,
 			)
@@ -122,6 +125,9 @@ def test_startup_keeps_model_selectors_active_when_live_catalog_loads() -> None:
 	assert "loaded 3 text-capable models" in str(selector_config["status"]).lower()
 	assert selector_config["provider_interactive"] is not False
 	assert selector_config["model_interactive"] is not False
+	assert selector_config["send_interactive"] is not False
+	assert selector_config["readiness_banner_visible"] is False
+	assert selector_config["readiness_banner_value"] == ""
 
 
 def test_startup_disables_model_selectors_when_api_key_validation_fails() -> None:
@@ -137,3 +143,7 @@ def test_startup_disables_model_selectors_when_api_key_validation_fails() -> Non
 	assert "validate openrouter_api_key" in str(selector_config["status"]).lower()
 	assert selector_config["provider_interactive"] is False
 	assert selector_config["model_interactive"] is False
+	assert selector_config["send_interactive"] is False
+	assert selector_config["readiness_banner_visible"] is True
+	assert "OpenRouter is not ready" in str(selector_config["readiness_banner_value"])
+	assert "OPENROUTER_API_KEY" in str(selector_config["readiness_banner_value"])
