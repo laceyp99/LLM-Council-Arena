@@ -285,7 +285,9 @@ def test_finalize_generation_state_marks_vote_unavailable_without_completions() 
 
 
 @pytest.mark.anyio
-async def test_stream_all_models_starts_new_round_with_cleared_submission_status(monkeypatch) -> None:
+async def test_stream_all_models_starts_new_round_with_cleared_submission_status(
+	monkeypatch,
+) -> None:
 	_stub_ui_helpers(monkeypatch)
 	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", None)
 

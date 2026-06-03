@@ -1,8 +1,8 @@
-import gradio as gr
 from datetime import datetime, timezone
 
-from arena import app as app_module
+import gradio as gr
 
+from arena import app as app_module
 
 
 def _stub_chatbot_updates(monkeypatch) -> None:

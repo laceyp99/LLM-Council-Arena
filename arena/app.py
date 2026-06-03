@@ -801,7 +801,9 @@ async def stream_all_models(
 			if reasoning_index is not None:
 				reasoning_content = _message_text_content(histories[slot][reasoning_index]).strip()
 				if not reasoning_content:
-					reasoning_content = "_Reasoning trace interrupted before the round could finish._"
+					reasoning_content = (
+						"_Reasoning trace interrupted before the round could finish._"
+					)
 				reasoning_message_indices[slot], _ = _upsert_reasoning_message(
 					history=histories[slot],
 					message_index=reasoning_index,
