@@ -1,24 +1,15 @@
+import gradio as gr
 from datetime import datetime, timezone
 
 from arena import app as app_module
 
 
-def _stub_vote_ui_helpers(monkeypatch) -> None:
+
+def _stub_chatbot_updates(monkeypatch) -> None:
 	monkeypatch.setattr(
 		app_module,
 		"_chatbot_updates",
 		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
-	)
-	monkeypatch.setattr(
-		app_module,
-		"_vote_ui_updates",
-		lambda *args, **kwargs: (
-			"vote-a",
-			"vote-b",
-			"vote-c",
-			"vote-reset",
-			"vote-submit",
-		),
 	)
 
 
@@ -61,7 +52,7 @@ def _build_votable_round_state() -> dict[str, object]:
 
 
 def test_submit_vote_returns_current_state_when_vote_is_incomplete(monkeypatch, tmp_path) -> None:
-	_stub_vote_ui_helpers(monkeypatch)
+	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
 	round_state["third_choice"] = None
@@ -74,12 +65,13 @@ def test_submit_vote_returns_current_state_when_vote_is_incomplete(monkeypatch, 
 
 
 def test_submit_vote_writes_round_artifacts_and_vote_record(monkeypatch, tmp_path) -> None:
-	_stub_vote_ui_helpers(monkeypatch)
+	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
 
 	outputs = app_module.submit_vote(round_state)
 	submitted_state = outputs[0]
+	status_update = outputs[9]
 	votes = app_module._read_json_file(app_module.VOTES_FILE, list, [])
 	session_dir = tmp_path / str(submitted_state["session_dir"])
 	meta_log = app_module._read_json_file(app_module.META_LOG_FILE, dict, {})
@@ -87,21 +79,26 @@ def test_submit_vote_writes_round_artifacts_and_vote_record(monkeypatch, tmp_pat
 	assert submitted_state["submitted"] is True
 	assert submitted_state["vote_stage"] == "submitted"
 	assert submitted_state["session_dir"] is not None
+	assert submitted_state["submission_status"] == "success"
+	assert submitted_state["submission_message"] == "Vote submitted and saved successfully."
 	assert votes[0]["round_id"] == submitted_state["round_id"]
 	assert session_dir.joinpath("round.json").exists()
 	assert session_dir.joinpath("vote.json").exists()
 	assert session_dir.joinpath("histories.json").exists()
 	assert session_dir.joinpath("generation.json").exists()
-	assert outputs[9].startswith("## Leaderboard")
-	assert outputs[10][0] == [1, "Label for alpha/one", "alpha", 1, 1, "100%"]
-	assert len(outputs[10]) == 3
+	assert isinstance(status_update, gr.Markdown)
+	assert status_update.visible is True
+	assert status_update.value == "Vote submitted and saved successfully."
+	assert outputs[10].startswith("## Leaderboard")
+	assert outputs[11][0] == [1, "Label for alpha/one", "alpha", 1, 1, "100%"]
+	assert len(outputs[11]) == 3
 	assert meta_log["total_rounds"] == 1
 
 
 def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 	monkeypatch, tmp_path
 ) -> None:
-	_stub_vote_ui_helpers(monkeypatch)
+	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
 	written_paths: list[object] = []
@@ -146,34 +143,40 @@ def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 
 
 def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp_path) -> None:
-	_stub_vote_ui_helpers(monkeypatch)
+	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
 	monkeypatch.setattr(
 		app_module,
 		"_append_vote_record",
-		lambda record: (_ for _ in ()).throw(RuntimeError("disk full")),
+		lambda record: (_ for _ in ()).throw(OSError("disk full")),
 	)
 
 	outputs = app_module.submit_vote(round_state)
 	submitted_state = outputs[0]
+	status_update = outputs[9]
 
 	assert submitted_state["submitted"] is True
 	assert submitted_state["log_warning"] == "disk full"
+	assert submitted_state["submission_status"] == "error"
+	assert "disk full" in submitted_state["submission_message"]
+	assert isinstance(status_update, gr.Markdown)
+	assert status_update.visible is True
+	assert "disk full" in status_update.value
 	assert (tmp_path / str(submitted_state["session_dir"]) / "round.json").exists()
 
 
 def test_submit_vote_returns_current_state_when_round_log_write_fails(
 	monkeypatch, tmp_path
 ) -> None:
-	_stub_vote_ui_helpers(monkeypatch)
+	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
 	append_calls: list[dict[str, object]] = []
 	monkeypatch.setattr(
 		app_module,
 		"_write_round_logs",
-		lambda candidate_state: (_ for _ in ()).throw(RuntimeError("log store unavailable")),
+		lambda candidate_state: (_ for _ in ()).throw(PermissionError("log store unavailable")),
 	)
 	monkeypatch.setattr(
 		app_module,
@@ -182,15 +185,21 @@ def test_submit_vote_returns_current_state_when_round_log_write_fails(
 	)
 
 	outputs = app_module.submit_vote(round_state)
+	status_update = outputs[9]
 
-	assert outputs[0] == round_state
+	assert outputs[0]["submitted"] is False
+	assert outputs[0]["submission_status"] == "error"
+	assert "log store unavailable" in outputs[0]["submission_message"]
+	assert isinstance(status_update, gr.Markdown)
+	assert status_update.visible is True
+	assert "log store unavailable" in status_update.value
 	assert append_calls == []
 	assert not app_module.VOTES_FILE.exists()
 	assert not app_module.SESSION_LOGS_DIR.exists()
 
 
 def test_submit_vote_returns_existing_submission_without_rewriting(monkeypatch, tmp_path) -> None:
-	_stub_vote_ui_helpers(monkeypatch)
+	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
 	round_state["submitted"] = True

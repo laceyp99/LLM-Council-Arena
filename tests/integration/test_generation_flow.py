@@ -285,6 +285,25 @@ def test_finalize_generation_state_marks_vote_unavailable_without_completions() 
 
 
 @pytest.mark.anyio
+async def test_stream_all_models_starts_new_round_with_cleared_submission_status(monkeypatch) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", None)
+
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+	)
+
+	initial_round_state = outputs[0][4]
+
+	assert initial_round_state["submission_status"] is None
+	assert initial_round_state["submission_message"] is None
+
+
+@pytest.mark.anyio
 async def test_stream_all_models_blocks_when_panel_has_no_model_selected(monkeypatch) -> None:
 	_stub_ui_helpers(monkeypatch)
 
