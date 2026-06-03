@@ -443,23 +443,32 @@ async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(mon
 
 
 @pytest.mark.anyio
-async def test_stream_all_models_surfaces_background_stream_failure(monkeypatch) -> None:
+async def test_stream_all_models_recovers_from_background_stream_failure(monkeypatch) -> None:
 	_stub_ui_helpers(monkeypatch)
 	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
 	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
 	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
 	monkeypatch.setattr(app_module.OpenRouterAPI, "_prompt_model", _failing_prompt_model)
 
-	outputs: list[tuple[object, ...]] = []
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+	)
 
-	with pytest.raises(RuntimeError, match="producer exploded"):
-		async for output in app_module.stream_all_models(
-			"Compare models.",
-			"System prompt",
-			"alpha/one",
-			"beta/two",
-			"gamma/three",
-		):
-			outputs.append(output)
+	final_round_state = outputs[-1][4]
 
-	assert outputs
+	assert len(outputs) >= 2
+	assert final_round_state["generation_completed_at"] is not None
+	assert final_round_state["ready_for_vote"] is False
+	assert final_round_state["vote_stage"] == "unavailable"
+	assert final_round_state["completed_slots"] == []
+	assert final_round_state["errored_slots"] == [0, 1, 2]
+	assert final_round_state["slot_logs"][0]["final_response"] == "first chunk"
+	assert final_round_state["slot_logs"][0]["status"] == "error"
+	assert (
+		final_round_state["slot_logs"][0]["error"]
+		== "Generation stopped before this round could finish."
+	)
