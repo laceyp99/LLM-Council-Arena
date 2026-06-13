@@ -19,6 +19,7 @@ def test_fallback_model_catalog_has_expected_entries() -> None:
 		{"model_id", "provider_key", "provider_label", "model_label", "full_label"} <= set(entry)
 		for entry in catalog
 	)
+	assert all(entry["reasoning_capabilities"]["supported"] is False for entry in catalog)
 
 
 def test_build_provider_index_groups_models_and_preserves_first_seen_order() -> None:

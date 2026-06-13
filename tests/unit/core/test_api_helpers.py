@@ -8,6 +8,7 @@ from arena.core.api import (
 	_normalize_reasoning_details,
 	_to_float,
 )
+from arena.core.reasoning import reasoning_capabilities_for_model
 
 
 def test_to_float_returns_float_or_none() -> None:
@@ -103,6 +104,124 @@ def test_normalize_model_catalog_filters_non_text_models_and_sorts_results() -> 
 	assert [entry["model_id"] for entry in normalized] == ["alpha/chat-model", "beta/plain_text"]
 	assert normalized[1]["provider_label"] == "Beta"
 	assert normalized[1]["model_label"] == "plain text"
+
+
+def test_normalize_model_catalog_preserves_openrouter_metadata() -> None:
+	models = [
+		{
+			"id": "alpha/reasoner",
+			"name": "Alpha: Reasoner",
+			"architecture": {
+				"input_modalities": ["text"],
+				"output_modalities": ["text"],
+			},
+			"supported_parameters": ["reasoning", "reasoning.max_tokens"],
+			"default_parameters": {"reasoning": {"max_tokens": 2048}},
+			"top_provider": {"max_completion_tokens": 8192},
+			"pricing": {"prompt": "0.000001", "completion": "0.000002"},
+		}
+	]
+
+	normalized = OpenRouterAPI.normalize_model_catalog(models)
+
+	assert normalized == [
+		{
+			"model_id": "alpha/reasoner",
+			"provider_key": "alpha",
+			"provider_label": "Alpha",
+			"model_label": "Reasoner",
+			"full_label": "Alpha: Reasoner",
+			"supported_parameters": ["reasoning", "reasoning.max_tokens"],
+			"default_parameters": {"reasoning": {"max_tokens": 2048}},
+			"top_provider": {"max_completion_tokens": 8192},
+			"pricing": {"prompt": "0.000001", "completion": "0.000002"},
+			"reasoning_capabilities": {
+				"supported": True,
+				"control_type": "budget",
+				"supports_effort": False,
+				"effort_choices": [],
+				"default_effort": None,
+				"supports_max_tokens": True,
+				"default_max_tokens": 2048,
+				"max_reasoning_tokens": 7372,
+				"pricing": {"prompt": "0.000001", "completion": "0.000002"},
+			},
+		}
+	]
+
+
+def test_reasoning_capabilities_are_hidden_without_supported_metadata() -> None:
+	capabilities = reasoning_capabilities_for_model({"supported_parameters": []})
+
+	assert capabilities["supported"] is False
+	assert capabilities["control_type"] == "none"
+	assert capabilities["effort_choices"] == []
+	assert capabilities["max_reasoning_tokens"] is None
+
+
+def test_reasoning_capabilities_do_not_infer_support_from_defaults() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{"default_parameters": {"reasoning": {"max_tokens": 4096}}}
+	)
+
+	assert capabilities["supported"] is False
+	assert capabilities["control_type"] == "none"
+	assert capabilities["default_max_tokens"] is None
+	assert capabilities["max_reasoning_tokens"] is None
+
+
+def test_reasoning_capabilities_use_toggle_for_generic_reasoning_support() -> None:
+	capabilities = reasoning_capabilities_for_model({"supported_parameters": ["reasoning"]})
+
+	assert capabilities["supported"] is True
+	assert capabilities["control_type"] == "toggle"
+	assert capabilities["supports_effort"] is False
+	assert capabilities["supports_max_tokens"] is False
+
+
+def test_reasoning_capabilities_favor_effort_controls_over_token_budget() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning", "reasoning.effort", "reasoning.max_tokens"],
+			"default_parameters": {"reasoning_effort": "low"},
+			"top_provider": {"max_completion_tokens": 100_000},
+			"pricing": {"internal_reasoning": "0.000003"},
+		}
+	)
+
+	assert capabilities["control_type"] == "effort"
+	assert capabilities["effort_choices"] == ["none", "low", "medium", "high"]
+	assert capabilities["default_effort"] == "low"
+	assert capabilities["supports_max_tokens"] is True
+	assert capabilities["max_reasoning_tokens"] == 90_000
+	assert capabilities["pricing"] == {"internal_reasoning": "0.000003"}
+
+
+def test_reasoning_capabilities_allow_large_token_budgets_from_provider_metadata() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning.max_tokens"],
+			"top_provider": {"max_completion_tokens": 200_000},
+		}
+	)
+
+	assert capabilities["control_type"] == "budget"
+	assert capabilities["max_reasoning_tokens"] == 180_000
+
+
+def test_reasoning_capabilities_use_toggle_when_budget_ceiling_is_missing() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning", "reasoning.max_tokens"],
+			"default_parameters": {"reasoning": {"max_tokens": 4096}},
+		}
+	)
+
+	assert capabilities["supported"] is True
+	assert capabilities["control_type"] == "toggle"
+	assert capabilities["supports_max_tokens"] is True
+	assert capabilities["default_max_tokens"] is None
+	assert capabilities["max_reasoning_tokens"] is None
 
 
 def test_get_key_info_fetches_openrouter_key_metadata(monkeypatch) -> None:

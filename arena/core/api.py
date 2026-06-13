@@ -7,6 +7,8 @@ from typing import Any, AsyncGenerator
 import httpx
 from dotenv import load_dotenv
 
+from arena.core.reasoning import reasoning_capabilities_for_model
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
@@ -166,6 +168,11 @@ class OpenRouterAPI:
 					"provider_label": provider_label,
 					"model_label": model_label or slug,
 					"full_label": full_name,
+					"supported_parameters": model.get("supported_parameters") or [],
+					"default_parameters": model.get("default_parameters") or {},
+					"top_provider": model.get("top_provider") or {},
+					"pricing": model.get("pricing") or {},
+					"reasoning_capabilities": reasoning_capabilities_for_model(model),
 				}
 			)
 
