@@ -413,30 +413,38 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 		"alpha/one",
 		"beta/two",
 		"gamma/three",
+		True,
+		2048.0,
+		None,
+		False,
+		4096,
+		"none",
+		False,
+		None,
+		"high",
 	)
 
 	final_round_state = outputs[-1][4]
 
 	assert requests[0]["api_key"] == "test-api-key"
-	expected_reasoning_settings = {"enabled": False, "max_tokens": 4096, "effort": "medium"}
 	assert requests[1]["prompt_requests"] == [
 		{
 			"slot": 0,
 			"model": "alpha/one",
 			"model_entry": {},
-			"reasoning_settings": expected_reasoning_settings,
+			"reasoning_settings": {"enabled": True, "max_tokens": 2048, "effort": None},
 		},
 		{
 			"slot": 1,
 			"model": "beta/two",
 			"model_entry": {},
-			"reasoning_settings": expected_reasoning_settings,
+			"reasoning_settings": {"enabled": False, "max_tokens": 4096, "effort": "none"},
 		},
 		{
 			"slot": 2,
 			"model": "gamma/three",
 			"model_entry": {},
-			"reasoning_settings": expected_reasoning_settings,
+			"reasoning_settings": {"enabled": False, "max_tokens": None, "effort": "high"},
 		},
 	]
 	assert requests[1]["kwargs"] == {}
@@ -445,8 +453,23 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 	assert final_round_state["completed_slots"] == [0, 1, 2]
 	assert final_round_state["errored_slots"] == []
 	assert final_round_state["slot_logs"][0]["final_response"] == "Alpha answer"
+	assert final_round_state["slot_logs"][0]["reasoning_settings"] == {
+		"enabled": True,
+		"max_tokens": 2048,
+		"effort": None,
+	}
 	assert final_round_state["slot_logs"][1]["reasoning_trace"] == "**Summary**\n\nBeta summary"
+	assert final_round_state["slot_logs"][1]["reasoning_settings"] == {
+		"enabled": False,
+		"max_tokens": 4096,
+		"effort": "none",
+	}
 	assert final_round_state["slot_logs"][2]["completion_tokens"] == 30
+	assert final_round_state["slot_logs"][2]["reasoning_settings"] == {
+		"enabled": False,
+		"max_tokens": None,
+		"effort": "high",
+	}
 
 
 @pytest.mark.anyio

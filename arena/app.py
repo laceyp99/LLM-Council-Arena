@@ -236,6 +236,7 @@ def _build_generation_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 				"status": slot_log.get("status") or "pending",
 				"error": slot_log.get("error"),
 				"final_response": slot_log.get("final_response") or "",
+				"reasoning_settings": slot_log.get("reasoning_settings") or {},
 				"reasoning_trace": slot_log.get("reasoning_trace") or "",
 				"reasoning_details": slot_log.get("reasoning_details") or [],
 				"usage": slot_log.get("usage") or {},
@@ -561,9 +562,16 @@ def _reasoning_settings_from_controls(
 	max_tokens: int | float | None,
 	effort: str | None,
 ) -> dict[str, Any]:
+	resolved_max_tokens = None
+	if not isinstance(max_tokens, bool) and max_tokens is not None:
+		try:
+			resolved_max_tokens = int(max_tokens)
+		except (TypeError, ValueError):
+			resolved_max_tokens = None
+
 	return {
 		"enabled": bool(enabled),
-		"max_tokens": max_tokens,
+		"max_tokens": resolved_max_tokens,
 		"effort": effort,
 	}
 
@@ -821,6 +829,23 @@ async def stream_all_models(
 	model_ids = [panel_1_model, panel_2_model, panel_3_model]
 	message_payload = _build_messages(user_text, system_prompt)
 	display_order = _shuffled_display_order()
+	reasoning_settings = [
+		_reasoning_settings_from_controls(
+			panel_1_reasoning_enabled,
+			panel_1_reasoning_budget,
+			panel_1_reasoning_effort,
+		),
+		_reasoning_settings_from_controls(
+			panel_2_reasoning_enabled,
+			panel_2_reasoning_budget,
+			panel_2_reasoning_effort,
+		),
+		_reasoning_settings_from_controls(
+			panel_3_reasoning_enabled,
+			panel_3_reasoning_budget,
+			panel_3_reasoning_effort,
+		),
+	]
 	round_state = _build_round_state(
 		user_text,
 		system_prompt,
@@ -830,6 +855,9 @@ async def stream_all_models(
 		chatbot_label=_chatbot_label,
 		provider_for_model=_provider_for_model,
 	)
+	for slot, settings in enumerate(reasoning_settings):
+		round_state["slot_logs"][slot]["reasoning_settings"] = dict(settings)
+
 	histories = [
 		[
 			{"role": "user", "content": user_text},
@@ -892,23 +920,6 @@ async def stream_all_models(
 		return
 
 	api = OpenRouterAPI(api_key=OPENROUTER_API_KEY, site_url=SITE_URL, site_name=SITE_NAME)
-	reasoning_settings = [
-		_reasoning_settings_from_controls(
-			panel_1_reasoning_enabled,
-			panel_1_reasoning_budget,
-			panel_1_reasoning_effort,
-		),
-		_reasoning_settings_from_controls(
-			panel_2_reasoning_enabled,
-			panel_2_reasoning_budget,
-			panel_2_reasoning_effort,
-		),
-		_reasoning_settings_from_controls(
-			panel_3_reasoning_enabled,
-			panel_3_reasoning_budget,
-			panel_3_reasoning_effort,
-		),
-	]
 	prompt_requests = [
 		{
 			"slot": slot,

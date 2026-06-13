@@ -27,6 +27,11 @@ def _sample_round_state() -> dict[str, object]:
 				"status": "complete",
 				"error": None,
 				"final_response": "Answer one",
+				"reasoning_settings": {
+					"enabled": True,
+					"max_tokens": 2048,
+					"effort": None,
+				},
 				"reasoning_trace": "Thought one",
 				"reasoning_details": [{"type": "reasoning.text", "text": "Thought one"}],
 				"usage": {"completion_tokens": 11},
@@ -46,6 +51,11 @@ def _sample_round_state() -> dict[str, object]:
 				"status": "error",
 				"error": "timeout",
 				"final_response": "",
+				"reasoning_settings": {
+					"enabled": False,
+					"max_tokens": 4096,
+					"effort": "none",
+				},
 				"reasoning_trace": "",
 				"reasoning_details": [],
 				"usage": {},
@@ -65,6 +75,11 @@ def _sample_round_state() -> dict[str, object]:
 				"status": "complete",
 				"error": None,
 				"final_response": "Answer three",
+				"reasoning_settings": {
+					"enabled": False,
+					"max_tokens": None,
+					"effort": "high",
+				},
 				"reasoning_trace": "Thought three",
 				"reasoning_details": [{"type": "reasoning.summary", "summary": "Summary"}],
 				"usage": {"completion_tokens": 22},
@@ -112,6 +127,11 @@ def test_build_generation_payload_includes_generation_stats_and_usage() -> None:
 	assert generation_payload["round_id"] == "round-1"
 	assert generation_payload["panels"][0]["status"] == "complete"
 	assert generation_payload["panels"][0]["completion_tokens"] == 11
+	assert generation_payload["panels"][0]["reasoning_settings"] == {
+		"enabled": True,
+		"max_tokens": 2048,
+		"effort": None,
+	}
 	assert generation_payload["panels"][2]["reasoning_details"][0]["summary"] == "Summary"
 
 
