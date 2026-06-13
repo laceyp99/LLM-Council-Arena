@@ -26,7 +26,7 @@ from arena.core.models import (
 from arena.core.models import (
 	_resolve_model_for_provider as _catalog_resolve_model_for_provider,
 )
-from arena.core.reasoning import reasoning_capabilities_for_model
+from arena.core.reasoning import reasoning_capabilities_for_model, reasoning_cost_hint
 from arena.state.round import (
 	_build_round_state,
 	_default_display_order,
@@ -407,6 +407,7 @@ def _reasoning_control_config(model_id: str | None) -> dict[str, dict[str, Any]]
 	capabilities = _reasoning_capabilities_for_model_id(model_id)
 	control_type = capabilities.get("control_type")
 	interactive = _selectors_interactive()
+	cost_hint = reasoning_cost_hint(capabilities)
 	default_budget = _default_reasoning_budget_value(capabilities)
 	max_reasoning_tokens = capabilities.get("max_reasoning_tokens")
 	slider_maximum = (
@@ -438,24 +439,30 @@ def _reasoning_control_config(model_id: str | None) -> dict[str, dict[str, Any]]
 			"visible": control_type == "effort",
 			"interactive": interactive,
 		},
+		"cost_hint": {
+			"value": cost_hint,
+			"visible": bool(cost_hint) and control_type != "none",
+		},
 	}
 
 
-def _reasoning_controls_for_model(model_id: str | None) -> tuple[Any, Any, Any]:
+def _reasoning_controls_for_model(model_id: str | None) -> tuple[Any, Any, Any, Any]:
 	config = _reasoning_control_config(model_id)
 	return (
 		gr.Checkbox(**config["enabled"]),
 		gr.Slider(**config["budget"]),
 		gr.Dropdown(**config["effort"]),
+		gr.Markdown(**config["cost_hint"]),
 	)
 
 
-def _reasoning_control_updates(model_id: str | None) -> tuple[Any, Any, Any]:
+def _reasoning_control_updates(model_id: str | None) -> tuple[Any, Any, Any, Any]:
 	config = _reasoning_control_config(model_id)
 	return (
 		gr.update(**config["enabled"]),
 		gr.update(**config["budget"]),
 		gr.update(**config["effort"]),
+		gr.update(**config["cost_hint"]),
 	)
 
 
@@ -1046,6 +1053,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						panel_1_reasoning_enabled,
 						panel_1_reasoning_budget,
 						panel_1_reasoning_effort,
+						panel_1_reasoning_cost_hint,
 					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[0])
 
 				with gr.Column(scale=1):
@@ -1065,6 +1073,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						panel_2_reasoning_enabled,
 						panel_2_reasoning_budget,
 						panel_2_reasoning_effort,
+						panel_2_reasoning_cost_hint,
 					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[1])
 
 				with gr.Column(scale=1):
@@ -1084,6 +1093,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						panel_3_reasoning_enabled,
 						panel_3_reasoning_budget,
 						panel_3_reasoning_effort,
+						panel_3_reasoning_cost_hint,
 					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[2])
 
 			with gr.Accordion("System Prompt", open=False):
@@ -1167,6 +1177,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			panel_1_reasoning_enabled,
 			panel_1_reasoning_budget,
 			panel_1_reasoning_effort,
+			panel_1_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1187,6 +1198,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			panel_2_reasoning_enabled,
 			panel_2_reasoning_budget,
 			panel_2_reasoning_effort,
+			panel_2_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1207,6 +1219,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			panel_3_reasoning_enabled,
 			panel_3_reasoning_budget,
 			panel_3_reasoning_effort,
+			panel_3_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1227,6 +1240,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			panel_1_reasoning_enabled,
 			panel_1_reasoning_budget,
 			panel_1_reasoning_effort,
+			panel_1_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1246,6 +1260,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			panel_2_reasoning_enabled,
 			panel_2_reasoning_budget,
 			panel_2_reasoning_effort,
+			panel_2_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1265,6 +1280,7 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			panel_3_reasoning_enabled,
 			panel_3_reasoning_budget,
 			panel_3_reasoning_effort,
+			panel_3_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,

@@ -8,7 +8,11 @@ from arena.core.api import (
 	_normalize_reasoning_details,
 	_to_float,
 )
-from arena.core.reasoning import normalize_reasoning_payload, reasoning_capabilities_for_model
+from arena.core.reasoning import (
+	normalize_reasoning_payload,
+	reasoning_capabilities_for_model,
+	reasoning_cost_hint,
+)
 
 
 def test_to_float_returns_float_or_none() -> None:
@@ -195,6 +199,49 @@ def test_reasoning_capabilities_favor_effort_controls_over_token_budget() -> Non
 	assert capabilities["supports_max_tokens"] is True
 	assert capabilities["max_reasoning_tokens"] == 90_000
 	assert capabilities["pricing"] == {"internal_reasoning": "0.000003"}
+
+
+def test_reasoning_cost_hint_formats_prompt_completion_and_reasoning_prices() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning"],
+			"pricing": {
+				"prompt": "0.000001",
+				"completion": "0.000002",
+				"internal_reasoning": "0.000003",
+			},
+		}
+	)
+
+	assert reasoning_cost_hint(capabilities) == ("input $1/M; output $2/M; reasoning $3/M")
+
+
+def test_reasoning_cost_hint_uses_output_note_without_internal_reasoning_price() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning"],
+			"pricing": {"prompt": "0.0000005", "completion": "0.0000015"},
+		}
+	)
+
+	assert reasoning_cost_hint(capabilities) == ("input $0.5/M; output $1.5/M")
+
+
+def test_reasoning_cost_hint_hides_without_supported_reasoning_or_pricing() -> None:
+	assert (
+		reasoning_cost_hint(
+			reasoning_capabilities_for_model(
+				{"supported_parameters": [], "pricing": {"completion": "0.000002"}}
+			)
+		)
+		== ""
+	)
+	assert (
+		reasoning_cost_hint(
+			reasoning_capabilities_for_model({"supported_parameters": ["reasoning"]})
+		)
+		== ""
+	)
 
 
 def test_reasoning_capabilities_detect_plain_effort_parameter() -> None:

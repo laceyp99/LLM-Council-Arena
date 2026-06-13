@@ -1,3 +1,4 @@
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 OPENROUTER_REASONING_EFFORT_CHOICES = ["none", "minimal", "low", "medium", "high", "xhigh"]
@@ -47,6 +48,48 @@ def _pricing_hint(model: dict[str, Any]) -> dict[str, Any]:
 		for key in ("prompt", "completion", "internal_reasoning")
 		if pricing.get(key) not in (None, "")
 	}
+
+
+def _price_per_million_tokens(value: Any) -> str | None:
+	try:
+		price = Decimal(str(value)) * Decimal(1_000_000)
+	except (InvalidOperation, ValueError):
+		return None
+
+	normalized = price.normalize()
+	if normalized == normalized.to_integral():
+		return f"${normalized:.0f}/M"
+	return f"${normalized:f}/M".rstrip("0").rstrip(".")
+
+
+def reasoning_cost_hint(capabilities: dict[str, Any]) -> str:
+	"""Return a concise UI hint from OpenRouter pricing metadata."""
+	if not capabilities.get("supported"):
+		return ""
+
+	pricing = _as_dict(capabilities.get("pricing"))
+	prompt_price = _price_per_million_tokens(pricing.get("prompt"))
+	completion_price = _price_per_million_tokens(pricing.get("completion"))
+	internal_reasoning_price = _price_per_million_tokens(pricing.get("internal_reasoning"))
+
+	parts = []
+	if prompt_price:
+		parts.append(f"input {prompt_price}")
+	if completion_price:
+		parts.append(f"output {completion_price}")
+
+	if not parts and not internal_reasoning_price:
+		return ""
+
+	if internal_reasoning_price:
+		reasoning_note = f"; reasoning {internal_reasoning_price}"
+	else:
+		reasoning_note = ""
+
+	base_hint = "; ".join(parts)
+	if base_hint:
+		return f"{base_hint}{reasoning_note}"
+	return f"{reasoning_note}."
 
 
 def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
