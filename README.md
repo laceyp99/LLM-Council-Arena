@@ -9,18 +9,40 @@ It is built around OpenRouter for live model generation, but it can still start 
 - Runs one prompt against three selected models in parallel.
 - Randomizes display order so the voter sees anonymous panels instead of fixed model identities.
 - Streams model output into side-by-side chat panels.
-- Captures provider-exposed reasoning traces when available.
+- Shows per-model reasoning controls when OpenRouter metadata reports support.
+- Captures provider-exposed reasoning traces when requested and available.
 - Records vote rankings and round metadata to local JSON files.
 - Builds a local leaderboard from accumulated vote history.
 
 ## How a round works
 
 1. Choose one model for each of the three panels.
-2. Enter a prompt and submit it.
-3. The app streams all three responses concurrently.
-4. Responses are displayed anonymously as `Response A`, `Response B`, and `Response C` until after voting.
-5. Rank the three outputs.
-6. Submit the vote to persist the round result and refresh the leaderboard.
+2. Adjust any reasoning controls shown for those models.
+3. Enter a prompt and submit it.
+4. The app streams all three responses concurrently.
+5. Responses are displayed anonymously as `Response A`, `Response B`, and `Response C` until after voting.
+6. Rank the three outputs.
+7. Submit the vote to persist the round result and refresh the leaderboard.
+
+## Reasoning controls
+
+Reasoning controls are shown independently for each selected model and are driven by
+OpenRouter model metadata. If the selected model does not report supported reasoning
+parameters, the app hides the reasoning controls for that panel.
+
+Depending on the selected model, the selector area may show:
+
+- An effort dropdown for models that support OpenRouter reasoning effort values.
+- An enable toggle plus a token-budget slider for models that support reasoning token budgets.
+- An enable toggle only when the model supports reasoning but does not expose a more specific control.
+
+When reasoning is actively requested, the app asks OpenRouter to expose reasoning traces by
+sending `exclude: false`. Unsupported reasoning fields are omitted from the request payload
+instead of forcing unsupported parameters.
+
+Where OpenRouter exposes pricing metadata, the selector shows a lightweight per-1M-token
+cost hint for input and output prices. These hints are approximate and are not a full cost
+estimate because actual reasoning token use and provider routing can vary.
 
 ## Installation
 
@@ -89,7 +111,7 @@ The app writes local JSON artifacts during use:
 - `votes.json`: append-only vote records
 - `arena_logs/meta.json`: aggregate leaderboard and round summary data
 - `arena_logs/sessions/<timestamp>_<round_id>/round.json`: round metadata
-- `arena_logs/sessions/<timestamp>_<round_id>/generation.json`: generation output, errors, token/cost stats, and reasoning details
+- `arena_logs/sessions/<timestamp>_<round_id>/generation.json`: generation output, errors, requested reasoning settings, token/cost stats, and reasoning details
 - `arena_logs/sessions/<timestamp>_<round_id>/histories.json`: serialized chat histories per panel
 - `arena_logs/sessions/<timestamp>_<round_id>/vote.json`: submitted ranking order
 
