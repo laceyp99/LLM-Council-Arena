@@ -66,6 +66,11 @@ def test_update_panel_provider_resolves_model_choices_and_resets_outputs(monkeyp
 	monkeypatch.setattr(app_module, "_resolve_model_for_provider", lambda provider_key: "beta/two")
 	monkeypatch.setattr(
 		app_module,
+		"_reasoning_control_updates",
+		lambda model_id: ("reasoning-enabled", "reasoning-budget", "reasoning-effort"),
+	)
+	monkeypatch.setattr(
+		app_module,
 		"_model_choices_for_provider",
 		lambda provider_key: [("Two", "beta/two")],
 	)
@@ -85,6 +90,9 @@ def test_update_panel_provider_resolves_model_choices_and_resets_outputs(monkeyp
 
 	assert outputs == (
 		{"choices": [("Two", "beta/two")], "value": "beta/two", "interactive": True},
+		"reasoning-enabled",
+		"reasoning-budget",
+		"reasoning-effort",
 		*reset_outputs,
 	)
 
@@ -102,8 +110,96 @@ def test_update_panel_model_resets_arena_outputs(monkeypatch) -> None:
 		"vote-submit",
 	)
 	monkeypatch.setattr(app_module, "_reset_arena_outputs", lambda: reset_outputs)
+	monkeypatch.setattr(
+		app_module,
+		"_reasoning_control_updates",
+		lambda model_id: ("reasoning-enabled", "reasoning-budget", "reasoning-effort"),
+	)
 
-	assert app_module.update_panel_model("beta/two") == reset_outputs
+	assert app_module.update_panel_model("beta/two") == (
+		"reasoning-enabled",
+		"reasoning-budget",
+		"reasoning-effort",
+		*reset_outputs,
+	)
+
+
+def test_reasoning_control_updates_hide_controls_for_unsupported_models(monkeypatch) -> None:
+	monkeypatch.setattr(app_module, "MODEL_LOOKUP", {"alpha/one": {}})
+	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
+
+	enable, budget, effort = app_module._reasoning_control_updates("alpha/one")
+
+	assert enable["visible"] is False
+	assert budget["visible"] is False
+	assert effort["visible"] is False
+
+
+def test_reasoning_control_updates_show_effort_for_generic_reasoning(monkeypatch) -> None:
+	monkeypatch.setattr(
+		app_module,
+		"MODEL_LOOKUP",
+		{
+			"alpha/one": {
+				"supported_parameters": ["include_reasoning", "max_tokens", "reasoning"],
+				"top_provider": {"max_completion_tokens": 8192},
+				"default_parameters": {"reasoning": {"max_tokens": 2048}},
+			}
+		},
+	)
+	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
+
+	enable, budget, effort = app_module._reasoning_control_updates("alpha/one")
+
+	assert enable["visible"] is False
+	assert budget["visible"] is False
+	assert budget["value"] == 2048
+	assert budget["maximum"] == 7372
+	assert effort["visible"] is True
+	assert effort["choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
+	assert effort["value"] == "medium"
+
+
+def test_reasoning_control_updates_show_effort_dropdown_only(monkeypatch) -> None:
+	monkeypatch.setattr(
+		app_module,
+		"MODEL_LOOKUP",
+		{
+			"alpha/one": {
+				"supported_parameters": ["reasoning.effort", "reasoning.max_tokens"],
+				"default_parameters": {"reasoning_effort": "high"},
+				"top_provider": {"max_completion_tokens": 8192},
+			}
+		},
+	)
+	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
+
+	enable, budget, effort = app_module._reasoning_control_updates("alpha/one")
+
+	assert enable["visible"] is False
+	assert budget["visible"] is False
+	assert effort["visible"] is True
+	assert effort["choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
+	assert effort["value"] == "high"
+
+
+def test_update_reasoning_budget_visibility_only_reveals_budget_models(monkeypatch) -> None:
+	monkeypatch.setattr(
+		app_module,
+		"MODEL_LOOKUP",
+		{
+			"budget/model": {
+				"id": "unknown/reasoner",
+				"supported_parameters": ["reasoning.max_tokens"],
+				"top_provider": {"max_completion_tokens": 4096},
+			},
+			"effort/model": {"supported_parameters": ["reasoning"]},
+		},
+	)
+
+	assert app_module.update_reasoning_budget_visibility(True, "budget/model")["visible"] is True
+	assert app_module.update_reasoning_budget_visibility(False, "budget/model")["visible"] is False
+	assert app_module.update_reasoning_budget_visibility(True, "effort/model")["visible"] is False
 
 
 def test_clear_histories_clears_user_input_and_resets_outputs(monkeypatch) -> None:

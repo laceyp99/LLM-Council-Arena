@@ -30,6 +30,19 @@ def _stub_ui_helpers(monkeypatch) -> None:
 
 
 async def _collect_stream_outputs(*args: object) -> list[tuple[object, ...]]:
+	if len(args) == 5:
+		args = (
+			*args,
+			False,
+			4096,
+			"medium",
+			False,
+			4096,
+			"medium",
+			False,
+			4096,
+			"medium",
+		)
 	return [output async for output in app_module.stream_all_models(*args)]
 
 
@@ -405,24 +418,25 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 	final_round_state = outputs[-1][4]
 
 	assert requests[0]["api_key"] == "test-api-key"
+	expected_reasoning_settings = {"enabled": False, "max_tokens": 4096, "effort": "medium"}
 	assert requests[1]["prompt_requests"] == [
 		{
 			"slot": 0,
 			"model": "alpha/one",
 			"model_entry": {},
-			"reasoning_settings": app_module.DEFAULT_REASONING_SETTINGS,
+			"reasoning_settings": expected_reasoning_settings,
 		},
 		{
 			"slot": 1,
 			"model": "beta/two",
 			"model_entry": {},
-			"reasoning_settings": app_module.DEFAULT_REASONING_SETTINGS,
+			"reasoning_settings": expected_reasoning_settings,
 		},
 		{
 			"slot": 2,
 			"model": "gamma/three",
 			"model_entry": {},
-			"reasoning_settings": app_module.DEFAULT_REASONING_SETTINGS,
+			"reasoning_settings": expected_reasoning_settings,
 		},
 	]
 	assert requests[1]["kwargs"] == {}

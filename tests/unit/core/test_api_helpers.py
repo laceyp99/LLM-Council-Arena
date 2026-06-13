@@ -137,10 +137,10 @@ def test_normalize_model_catalog_preserves_openrouter_metadata() -> None:
 			"pricing": {"prompt": "0.000001", "completion": "0.000002"},
 			"reasoning_capabilities": {
 				"supported": True,
-				"control_type": "budget",
-				"supports_effort": False,
-				"effort_choices": [],
-				"default_effort": None,
+				"control_type": "effort",
+				"supports_effort": True,
+				"effort_choices": ["none", "minimal", "low", "medium", "high", "xhigh"],
+				"default_effort": "medium",
 				"supports_max_tokens": True,
 				"default_max_tokens": 2048,
 				"max_reasoning_tokens": 7372,
@@ -170,12 +170,12 @@ def test_reasoning_capabilities_do_not_infer_support_from_defaults() -> None:
 	assert capabilities["max_reasoning_tokens"] is None
 
 
-def test_reasoning_capabilities_use_toggle_for_generic_reasoning_support() -> None:
+def test_reasoning_capabilities_use_effort_for_generic_reasoning_support() -> None:
 	capabilities = reasoning_capabilities_for_model({"supported_parameters": ["reasoning"]})
 
 	assert capabilities["supported"] is True
-	assert capabilities["control_type"] == "toggle"
-	assert capabilities["supports_effort"] is False
+	assert capabilities["control_type"] == "effort"
+	assert capabilities["supports_effort"] is True
 	assert capabilities["supports_max_tokens"] is False
 
 
@@ -190,11 +190,66 @@ def test_reasoning_capabilities_favor_effort_controls_over_token_budget() -> Non
 	)
 
 	assert capabilities["control_type"] == "effort"
-	assert capabilities["effort_choices"] == ["none", "low", "medium", "high"]
+	assert capabilities["effort_choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
 	assert capabilities["default_effort"] == "low"
 	assert capabilities["supports_max_tokens"] is True
 	assert capabilities["max_reasoning_tokens"] == 90_000
 	assert capabilities["pricing"] == {"internal_reasoning": "0.000003"}
+
+
+def test_reasoning_capabilities_detect_plain_effort_parameter() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["effort", "max_tokens", "reasoning"],
+			"top_provider": {"max_completion_tokens": 32_000},
+		}
+	)
+
+	assert capabilities["control_type"] == "effort"
+	assert capabilities["supports_effort"] is True
+	assert capabilities["supports_max_tokens"] is True
+
+
+def test_reasoning_capabilities_detect_openai_reasoning_effort_models() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"id": "openai/gpt-5",
+			"supported_parameters": ["include_reasoning", "max_tokens", "reasoning"],
+			"top_provider": {"max_completion_tokens": 128_000},
+		}
+	)
+
+	assert capabilities["control_type"] == "effort"
+	assert capabilities["supports_effort"] is True
+	assert capabilities["max_reasoning_tokens"] == 115_200
+
+
+def test_reasoning_capabilities_detect_anthropic_openrouter_effort_models() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"id": "anthropic/claude-fable-5",
+			"supported_parameters": ["include_reasoning", "max_tokens", "reasoning"],
+			"top_provider": {"max_completion_tokens": 128_000},
+		}
+	)
+
+	assert capabilities["control_type"] == "effort"
+	assert capabilities["supports_effort"] is True
+	assert capabilities["max_reasoning_tokens"] == 115_200
+
+
+def test_reasoning_capabilities_detect_gemini_openrouter_effort_models() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"id": "google/gemini-3.1-pro-preview",
+			"supported_parameters": ["include_reasoning", "max_tokens", "reasoning"],
+			"top_provider": {"max_completion_tokens": 65_536},
+		}
+	)
+
+	assert capabilities["control_type"] == "effort"
+	assert capabilities["supports_effort"] is True
+	assert capabilities["max_reasoning_tokens"] == 58_982
 
 
 def test_reasoning_capabilities_allow_large_token_budgets_from_provider_metadata() -> None:
@@ -209,7 +264,22 @@ def test_reasoning_capabilities_allow_large_token_budgets_from_provider_metadata
 	assert capabilities["max_reasoning_tokens"] == 180_000
 
 
-def test_reasoning_capabilities_use_toggle_when_budget_ceiling_is_missing() -> None:
+def test_reasoning_capabilities_use_effort_for_reasoning_with_max_tokens() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"id": "unknown/reasoner",
+			"supported_parameters": ["include_reasoning", "max_tokens", "reasoning"],
+			"top_provider": {"max_completion_tokens": 32_768},
+		}
+	)
+
+	assert capabilities["control_type"] == "effort"
+	assert capabilities["supports_effort"] is True
+	assert capabilities["supports_max_tokens"] is True
+	assert capabilities["max_reasoning_tokens"] == 29_491
+
+
+def test_reasoning_capabilities_use_effort_when_budget_ceiling_is_missing() -> None:
 	capabilities = reasoning_capabilities_for_model(
 		{
 			"supported_parameters": ["reasoning", "reasoning.max_tokens"],
@@ -218,7 +288,7 @@ def test_reasoning_capabilities_use_toggle_when_budget_ceiling_is_missing() -> N
 	)
 
 	assert capabilities["supported"] is True
-	assert capabilities["control_type"] == "toggle"
+	assert capabilities["control_type"] == "effort"
 	assert capabilities["supports_max_tokens"] is True
 	assert capabilities["default_max_tokens"] is None
 	assert capabilities["max_reasoning_tokens"] is None
@@ -244,6 +314,19 @@ def test_normalize_reasoning_payload_builds_effort_payloads() -> None:
 	assert normalize_reasoning_payload(model, {"effort": "extreme"}) is None
 
 
+def test_normalize_reasoning_payload_keeps_openrouter_effort_for_reasoning_models() -> None:
+	model = {
+		"id": "anthropic/claude-fable-5",
+		"supported_parameters": ["include_reasoning", "max_tokens", "reasoning"],
+		"top_provider": {"max_completion_tokens": 128_000},
+	}
+
+	assert normalize_reasoning_payload(model, {"effort": "high"}) == {
+		"effort": "high",
+		"exclude": False,
+	}
+
+
 def test_normalize_reasoning_payload_builds_budget_payloads() -> None:
 	model = {
 		"supported_parameters": ["reasoning.max_tokens"],
@@ -260,8 +343,9 @@ def test_normalize_reasoning_payload_builds_budget_payloads() -> None:
 def test_normalize_reasoning_payload_uses_toggle_when_budget_ceiling_is_missing() -> None:
 	model = {"supported_parameters": ["reasoning", "reasoning.max_tokens"]}
 
-	assert normalize_reasoning_payload(model, {"enabled": True, "max_tokens": 4096}) == {
-		"enabled": True,
+	assert normalize_reasoning_payload(model, {"enabled": True, "max_tokens": 4096}) is None
+	assert normalize_reasoning_payload(model, {"effort": "medium"}) == {
+		"effort": "medium",
 		"exclude": False,
 	}
 

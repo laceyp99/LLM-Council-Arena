@@ -9,7 +9,6 @@ DEFAULT_MODEL_IDS = [
 	"anthropic/claude-sonnet-4.5",
 	"google/gemini-3.1-flash-lite-preview",
 ]
-DEFAULT_REASONING_SETTINGS = {"enabled": True}
 APP_DIR = Path(__file__).resolve().parents[2]
 VOTES_FILE = APP_DIR / "votes.json"
 LOGS_DIR = APP_DIR / "arena_logs"

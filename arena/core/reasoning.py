@@ -1,6 +1,6 @@
 from typing import Any
 
-OPENROUTER_REASONING_EFFORT_CHOICES = ["none", "low", "medium", "high"]
+OPENROUTER_REASONING_EFFORT_CHOICES = ["none", "minimal", "low", "medium", "high", "xhigh"]
 REASONING_TOKEN_BUDGET_OUTPUT_RATIO = 0.9
 
 
@@ -28,6 +28,10 @@ def _supported_parameter_set(model: dict[str, Any]) -> set[str]:
 	return set(_as_string_list(model.get("supported_parameters")))
 
 
+def _supports_openrouter_effort_levels(model: dict[str, Any]) -> bool:
+	return "reasoning" in _supported_parameter_set(model)
+
+
 def _default_reasoning_parameters(model: dict[str, Any]) -> dict[str, Any]:
 	default_parameters = _as_dict(model.get("default_parameters"))
 	reasoning_defaults = _as_dict(default_parameters.get("reasoning"))
@@ -51,8 +55,13 @@ def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
 	default_reasoning = _default_reasoning_parameters(model)
 	top_provider = _as_dict(model.get("top_provider"))
 
-	supports_effort = bool({"reasoning.effort", "reasoning_effort"} & supported_parameters)
-	supports_max_tokens = "reasoning.max_tokens" in supported_parameters
+	supports_native_effort = bool(
+		{"reasoning.effort", "reasoning_effort", "effort"} & supported_parameters
+	)
+	supports_effort = supports_native_effort or _supports_openrouter_effort_levels(model)
+	supports_max_tokens = "reasoning.max_tokens" in supported_parameters or (
+		"reasoning" in supported_parameters and "max_tokens" in supported_parameters
+	)
 	supports_reasoning = (
 		supports_effort or supports_max_tokens or "reasoning" in supported_parameters
 	)

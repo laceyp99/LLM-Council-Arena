@@ -26,6 +26,7 @@ from arena.core.models import (
 from arena.core.models import (
 	_resolve_model_for_provider as _catalog_resolve_model_for_provider,
 )
+from arena.core.reasoning import reasoning_capabilities_for_model
 from arena.state.round import (
 	_build_round_state,
 	_default_display_order,
@@ -48,7 +49,6 @@ from arena.state.voting import (
 from arena.ui.config import (
 	APP_DIR,
 	DEFAULT_MODEL_IDS,
-	DEFAULT_REASONING_SETTINGS,
 	DEFAULT_SYSTEM_PROMPT,
 	LOGS_DIR,
 	META_LOG_FILE,
@@ -88,6 +88,8 @@ DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
 	panel_count=PANEL_COUNT,
 )
 GENERATION_INTERRUPTED_MESSAGE = "Generation stopped before this round could finish."
+REASONING_BUDGET_STEP = 128
+DEFAULT_REASONING_BUDGET_MAX = 4096
 
 
 def _timestamp_slug(iso_timestamp: str | None) -> str:
@@ -384,6 +386,78 @@ def _selectors_interactive() -> bool:
 	return not MODEL_CATALOG_STATUS.lower().startswith("warning:")
 
 
+def _reasoning_capabilities_for_model_id(model_id: str | None) -> dict[str, Any]:
+	return reasoning_capabilities_for_model(MODEL_LOOKUP.get(model_id or "", {}))
+
+
+def _default_reasoning_budget_value(capabilities: dict[str, Any]) -> int:
+	default_max_tokens = capabilities.get("default_max_tokens")
+	if isinstance(default_max_tokens, int) and default_max_tokens > 0:
+		return default_max_tokens
+
+	max_reasoning_tokens = capabilities.get("max_reasoning_tokens")
+	if isinstance(max_reasoning_tokens, int) and max_reasoning_tokens > 0:
+		return min(max_reasoning_tokens, DEFAULT_REASONING_BUDGET_MAX)
+
+	return REASONING_BUDGET_STEP
+
+
+def _reasoning_control_config(model_id: str | None) -> dict[str, dict[str, Any]]:
+	capabilities = _reasoning_capabilities_for_model_id(model_id)
+	control_type = capabilities.get("control_type")
+	interactive = _selectors_interactive()
+	default_budget = _default_reasoning_budget_value(capabilities)
+	max_reasoning_tokens = capabilities.get("max_reasoning_tokens")
+	slider_maximum = (
+		max_reasoning_tokens
+		if isinstance(max_reasoning_tokens, int) and max_reasoning_tokens > 0
+		else DEFAULT_REASONING_BUDGET_MAX
+	)
+
+	return {
+		"enabled": {
+			"label": "Enable reasoning",
+			"value": False,
+			"visible": control_type in {"budget", "toggle"},
+			"interactive": interactive,
+		},
+		"budget": {
+			"label": "Reasoning token budget",
+			"minimum": REASONING_BUDGET_STEP,
+			"maximum": slider_maximum,
+			"step": REASONING_BUDGET_STEP,
+			"value": min(default_budget, slider_maximum),
+			"visible": False,
+			"interactive": interactive,
+		},
+		"effort": {
+			"label": "Reasoning effort",
+			"choices": capabilities.get("effort_choices") or [],
+			"value": capabilities.get("default_effort"),
+			"visible": control_type == "effort",
+			"interactive": interactive,
+		},
+	}
+
+
+def _reasoning_controls_for_model(model_id: str | None) -> tuple[Any, Any, Any]:
+	config = _reasoning_control_config(model_id)
+	return (
+		gr.Checkbox(**config["enabled"]),
+		gr.Slider(**config["budget"]),
+		gr.Dropdown(**config["effort"]),
+	)
+
+
+def _reasoning_control_updates(model_id: str | None) -> tuple[Any, Any, Any]:
+	config = _reasoning_control_config(model_id)
+	return (
+		gr.update(**config["enabled"]),
+		gr.update(**config["budget"]),
+		gr.update(**config["effort"]),
+	)
+
+
 def _openrouter_status_banner() -> gr.HTML:
 	if _selectors_interactive():
 		return gr.HTML(value="", visible=False)
@@ -459,13 +533,39 @@ def update_panel_provider(provider_key: str):
 			value=resolved_model_id,
 			interactive=_selectors_interactive(),
 		),
+		*_reasoning_control_updates(resolved_model_id),
 		*_reset_arena_outputs(),
 	)
 
 
 def update_panel_model(model_id: str):
-	_ = model_id
-	return _reset_arena_outputs()
+	return (
+		*_reasoning_control_updates(model_id),
+		*_reset_arena_outputs(),
+	)
+
+
+def update_reasoning_budget_visibility(enabled: bool, model_id: str):
+	capabilities = _reasoning_capabilities_for_model_id(model_id)
+	if capabilities.get("control_type") != "budget":
+		return gr.update(visible=False)
+
+	return gr.update(
+		visible=bool(enabled),
+		value=_default_reasoning_budget_value(capabilities),
+	)
+
+
+def _reasoning_settings_from_controls(
+	enabled: bool,
+	max_tokens: int | float | None,
+	effort: str | None,
+) -> dict[str, Any]:
+	return {
+		"enabled": bool(enabled),
+		"max_tokens": max_tokens,
+		"effort": effort,
+	}
 
 
 def submit_vote(round_state: dict[str, Any] | None):
@@ -704,6 +804,15 @@ async def stream_all_models(
 	panel_1_model: str,
 	panel_2_model: str,
 	panel_3_model: str,
+	panel_1_reasoning_enabled: bool,
+	panel_1_reasoning_budget: int | float | None,
+	panel_1_reasoning_effort: str | None,
+	panel_2_reasoning_enabled: bool,
+	panel_2_reasoning_budget: int | float | None,
+	panel_2_reasoning_effort: str | None,
+	panel_3_reasoning_enabled: bool,
+	panel_3_reasoning_budget: int | float | None,
+	panel_3_reasoning_effort: str | None,
 ):
 	user_text = (user_text or "").strip()
 	if not user_text:
@@ -783,12 +892,29 @@ async def stream_all_models(
 		return
 
 	api = OpenRouterAPI(api_key=OPENROUTER_API_KEY, site_url=SITE_URL, site_name=SITE_NAME)
+	reasoning_settings = [
+		_reasoning_settings_from_controls(
+			panel_1_reasoning_enabled,
+			panel_1_reasoning_budget,
+			panel_1_reasoning_effort,
+		),
+		_reasoning_settings_from_controls(
+			panel_2_reasoning_enabled,
+			panel_2_reasoning_budget,
+			panel_2_reasoning_effort,
+		),
+		_reasoning_settings_from_controls(
+			panel_3_reasoning_enabled,
+			panel_3_reasoning_budget,
+			panel_3_reasoning_effort,
+		),
+	]
 	prompt_requests = [
 		{
 			"slot": slot,
 			"model": model_id,
 			"model_entry": MODEL_LOOKUP.get(model_id, {}),
-			"reasoning_settings": DEFAULT_REASONING_SETTINGS,
+			"reasoning_settings": reasoning_settings[slot],
 		}
 		for slot, model_id in enumerate(model_ids)
 	]
@@ -905,6 +1031,11 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						value=DEFAULT_PANEL_MODEL_IDS[0],
 						interactive=_selectors_interactive(),
 					)
+					(
+						panel_1_reasoning_enabled,
+						panel_1_reasoning_budget,
+						panel_1_reasoning_effort,
+					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[0])
 
 				with gr.Column(scale=1):
 					panel_2_provider = gr.Dropdown(
@@ -919,6 +1050,11 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						value=DEFAULT_PANEL_MODEL_IDS[1],
 						interactive=_selectors_interactive(),
 					)
+					(
+						panel_2_reasoning_enabled,
+						panel_2_reasoning_budget,
+						panel_2_reasoning_effort,
+					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[1])
 
 				with gr.Column(scale=1):
 					panel_3_provider = gr.Dropdown(
@@ -933,6 +1069,11 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						value=DEFAULT_PANEL_MODEL_IDS[2],
 						interactive=_selectors_interactive(),
 					)
+					(
+						panel_3_reasoning_enabled,
+						panel_3_reasoning_budget,
+						panel_3_reasoning_effort,
+					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[2])
 
 			with gr.Accordion("System Prompt", open=False):
 				system_prompt = gr.Textbox(
@@ -990,13 +1131,31 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		vote_submit_btn,
 		vote_status_banner,
 	]
-	submit_inputs = [user_input, system_prompt, panel_1_model, panel_2_model, panel_3_model]
+	submit_inputs = [
+		user_input,
+		system_prompt,
+		panel_1_model,
+		panel_2_model,
+		panel_3_model,
+		panel_1_reasoning_enabled,
+		panel_1_reasoning_budget,
+		panel_1_reasoning_effort,
+		panel_2_reasoning_enabled,
+		panel_2_reasoning_budget,
+		panel_2_reasoning_effort,
+		panel_3_reasoning_enabled,
+		panel_3_reasoning_budget,
+		panel_3_reasoning_effort,
+	]
 
 	panel_1_provider.change(
 		fn=update_panel_provider,
 		inputs=[panel_1_provider],
 		outputs=[
 			panel_1_model,
+			panel_1_reasoning_enabled,
+			panel_1_reasoning_budget,
+			panel_1_reasoning_effort,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1014,6 +1173,9 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		inputs=[panel_2_provider],
 		outputs=[
 			panel_2_model,
+			panel_2_reasoning_enabled,
+			panel_2_reasoning_budget,
+			panel_2_reasoning_effort,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1031,6 +1193,9 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		inputs=[panel_3_provider],
 		outputs=[
 			panel_3_model,
+			panel_3_reasoning_enabled,
+			panel_3_reasoning_budget,
+			panel_3_reasoning_effort,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1048,6 +1213,9 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		fn=update_panel_model,
 		inputs=[panel_1_model],
 		outputs=[
+			panel_1_reasoning_enabled,
+			panel_1_reasoning_budget,
+			panel_1_reasoning_effort,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1064,6 +1232,9 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		fn=update_panel_model,
 		inputs=[panel_2_model],
 		outputs=[
+			panel_2_reasoning_enabled,
+			panel_2_reasoning_budget,
+			panel_2_reasoning_effort,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1080,6 +1251,9 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		fn=update_panel_model,
 		inputs=[panel_3_model],
 		outputs=[
+			panel_3_reasoning_enabled,
+			panel_3_reasoning_budget,
+			panel_3_reasoning_effort,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1091,6 +1265,21 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_submit_btn,
 			vote_status_banner,
 		],
+	)
+	panel_1_reasoning_enabled.change(
+		fn=update_reasoning_budget_visibility,
+		inputs=[panel_1_reasoning_enabled, panel_1_model],
+		outputs=[panel_1_reasoning_budget],
+	)
+	panel_2_reasoning_enabled.change(
+		fn=update_reasoning_budget_visibility,
+		inputs=[panel_2_reasoning_enabled, panel_2_model],
+		outputs=[panel_2_reasoning_budget],
+	)
+	panel_3_reasoning_enabled.change(
+		fn=update_reasoning_budget_visibility,
+		inputs=[panel_3_reasoning_enabled, panel_3_model],
+		outputs=[panel_3_reasoning_budget],
 	)
 
 	user_input.submit(
