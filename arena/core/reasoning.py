@@ -94,3 +94,41 @@ def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
 		"max_reasoning_tokens": max_reasoning_tokens,
 		"pricing": _pricing_hint(model),
 	}
+
+
+def normalize_reasoning_payload(
+	model: dict[str, Any],
+	settings: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+	"""Build a supported OpenRouter reasoning payload from user settings."""
+	if not isinstance(settings, dict):
+		return None
+
+	capabilities = reasoning_capabilities_for_model(model)
+	control_type = capabilities["control_type"]
+	if not capabilities["supported"] or control_type == "none":
+		return None
+
+	if control_type == "effort":
+		effort = settings.get("effort")
+		if effort not in capabilities["effort_choices"]:
+			return None
+		if effort == "none":
+			return {"effort": "none"}
+		return {"effort": effort, "exclude": False}
+
+	if control_type == "budget":
+		if not settings.get("enabled"):
+			return None
+		max_tokens = _positive_int(settings.get("max_tokens"))
+		max_reasoning_tokens = _positive_int(capabilities.get("max_reasoning_tokens"))
+		if max_tokens is None or max_reasoning_tokens is None:
+			return None
+		return {"max_tokens": min(max_tokens, max_reasoning_tokens), "exclude": False}
+
+	if control_type == "toggle":
+		if not settings.get("enabled"):
+			return None
+		return {"enabled": True, "exclude": False}
+
+	return None

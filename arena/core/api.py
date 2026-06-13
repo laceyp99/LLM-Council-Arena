@@ -7,9 +7,10 @@ from typing import Any, AsyncGenerator
 import httpx
 from dotenv import load_dotenv
 
-from arena.core.reasoning import reasoning_capabilities_for_model
+from arena.core.reasoning import normalize_reasoning_payload, reasoning_capabilities_for_model
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+REQUEST_CONTROL_KEYS = {"model", "slot", "model_entry", "reasoning_settings", "params"}
 
 
 def _to_float(value: Any) -> float | None:
@@ -215,6 +216,34 @@ class OpenRouterAPI:
 
 		return requests
 
+	@staticmethod
+	def _request_payload_params(
+		request: dict[str, Any],
+		shared_kwargs: dict[str, Any],
+	) -> dict[str, Any]:
+		params = dict(shared_kwargs)
+		request_params = request.get("params")
+		if isinstance(request_params, dict):
+			params.update(request_params)
+
+		model_entry = request.get("model_entry")
+		reasoning_settings = request.get("reasoning_settings")
+		control_keys = set(REQUEST_CONTROL_KEYS)
+		if isinstance(model_entry, dict):
+			control_keys.add("reasoning")
+			reasoning_payload = normalize_reasoning_payload(model_entry, reasoning_settings)
+			if reasoning_payload is None:
+				params.pop("reasoning", None)
+			else:
+				params["reasoning"] = reasoning_payload
+
+		for key, value in request.items():
+			if key in control_keys:
+				continue
+			params[key] = value
+
+		return params
+
 	async def _prompt_model(
 		self,
 		client: httpx.AsyncClient,
@@ -225,11 +254,12 @@ class OpenRouterAPI:
 		"""Asynchronously prompt a single model and yield stream chunks."""
 		model = request["model"]
 		slot = request.get("slot")
+		request_params = self._request_payload_params(request, kwargs)
 		payload = {
 			"model": model,
 			"messages": messages,
 			"stream": True,  # Enable streaming
-			**kwargs,
+			**request_params,
 		}
 		request_started_at = time.perf_counter()
 		first_token_at: float | None = None

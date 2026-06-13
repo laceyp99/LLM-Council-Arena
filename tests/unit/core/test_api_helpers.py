@@ -8,7 +8,7 @@ from arena.core.api import (
 	_normalize_reasoning_details,
 	_to_float,
 )
-from arena.core.reasoning import reasoning_capabilities_for_model
+from arena.core.reasoning import normalize_reasoning_payload, reasoning_capabilities_for_model
 
 
 def test_to_float_returns_float_or_none() -> None:
@@ -222,6 +222,94 @@ def test_reasoning_capabilities_use_toggle_when_budget_ceiling_is_missing() -> N
 	assert capabilities["supports_max_tokens"] is True
 	assert capabilities["default_max_tokens"] is None
 	assert capabilities["max_reasoning_tokens"] is None
+
+
+def test_normalize_reasoning_payload_omits_unsupported_models() -> None:
+	payload = normalize_reasoning_payload(
+		{"supported_parameters": []},
+		{"enabled": True, "max_tokens": 1024, "effort": "high"},
+	)
+
+	assert payload is None
+
+
+def test_normalize_reasoning_payload_builds_effort_payloads() -> None:
+	model = {"supported_parameters": ["reasoning.effort"]}
+
+	assert normalize_reasoning_payload(model, {"effort": "high"}) == {
+		"effort": "high",
+		"exclude": False,
+	}
+	assert normalize_reasoning_payload(model, {"effort": "none"}) == {"effort": "none"}
+	assert normalize_reasoning_payload(model, {"effort": "extreme"}) is None
+
+
+def test_normalize_reasoning_payload_builds_budget_payloads() -> None:
+	model = {
+		"supported_parameters": ["reasoning.max_tokens"],
+		"top_provider": {"max_completion_tokens": 10_000},
+	}
+
+	assert normalize_reasoning_payload(model, {"enabled": True, "max_tokens": 9500}) == {
+		"max_tokens": 9000,
+		"exclude": False,
+	}
+	assert normalize_reasoning_payload(model, {"enabled": False, "max_tokens": 4096}) is None
+
+
+def test_normalize_reasoning_payload_uses_toggle_when_budget_ceiling_is_missing() -> None:
+	model = {"supported_parameters": ["reasoning", "reasoning.max_tokens"]}
+
+	assert normalize_reasoning_payload(model, {"enabled": True, "max_tokens": 4096}) == {
+		"enabled": True,
+		"exclude": False,
+	}
+
+
+def test_request_payload_params_merge_shared_and_request_specific_values() -> None:
+	params = OpenRouterAPI._request_payload_params(
+		{
+			"slot": 0,
+			"model": "alpha/one",
+			"temperature": 0.7,
+			"params": {"top_p": 0.8, "temperature": 0.5},
+		},
+		{"temperature": 0.2, "max_tokens": 1000},
+	)
+
+	assert params == {"temperature": 0.7, "max_tokens": 1000, "top_p": 0.8}
+
+
+def test_request_payload_params_sanitizes_reasoning_from_model_metadata() -> None:
+	params = OpenRouterAPI._request_payload_params(
+		{
+			"slot": 0,
+			"model": "alpha/one",
+			"model_entry": {
+				"supported_parameters": ["reasoning.effort", "reasoning.max_tokens"],
+				"top_provider": {"max_completion_tokens": 20_000},
+			},
+			"reasoning_settings": {"effort": "medium", "max_tokens": 18_000},
+			"reasoning": {"max_tokens": 18_000},
+		},
+		{"reasoning": {"enabled": True}},
+	)
+
+	assert params == {"reasoning": {"effort": "medium", "exclude": False}}
+
+
+def test_request_payload_params_removes_shared_reasoning_for_unsupported_model() -> None:
+	params = OpenRouterAPI._request_payload_params(
+		{
+			"slot": 0,
+			"model": "alpha/one",
+			"model_entry": {"supported_parameters": []},
+			"reasoning_settings": {"enabled": True},
+		},
+		{"reasoning": {"enabled": True}, "temperature": 0.2},
+	)
+
+	assert params == {"temperature": 0.2}
 
 
 def test_get_key_info_fetches_openrouter_key_metadata(monkeypatch) -> None:

@@ -406,11 +406,26 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 
 	assert requests[0]["api_key"] == "test-api-key"
 	assert requests[1]["prompt_requests"] == [
-		{"slot": 0, "model": "alpha/one"},
-		{"slot": 1, "model": "beta/two"},
-		{"slot": 2, "model": "gamma/three"},
+		{
+			"slot": 0,
+			"model": "alpha/one",
+			"model_entry": {},
+			"reasoning_settings": app_module.DEFAULT_REASONING_SETTINGS,
+		},
+		{
+			"slot": 1,
+			"model": "beta/two",
+			"model_entry": {},
+			"reasoning_settings": app_module.DEFAULT_REASONING_SETTINGS,
+		},
+		{
+			"slot": 2,
+			"model": "gamma/three",
+			"model_entry": {},
+			"reasoning_settings": app_module.DEFAULT_REASONING_SETTINGS,
+		},
 	]
-	assert requests[1]["kwargs"] == {"reasoning": app_module.DEFAULT_REASONING_SETTINGS}
+	assert requests[1]["kwargs"] == {}
 	assert final_round_state["ready_for_vote"] is True
 	assert final_round_state["vote_stage"] == "pick_first"
 	assert final_round_state["completed_slots"] == [0, 1, 2]

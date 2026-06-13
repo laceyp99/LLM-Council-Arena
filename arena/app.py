@@ -787,6 +787,8 @@ async def stream_all_models(
 		{
 			"slot": slot,
 			"model": model_id,
+			"model_entry": MODEL_LOOKUP.get(model_id, {}),
+			"reasoning_settings": DEFAULT_REASONING_SETTINGS,
 		}
 		for slot, model_id in enumerate(model_ids)
 	]
@@ -795,7 +797,6 @@ async def stream_all_models(
 		async for chunk in api.prompt_models_concurrent(
 			prompt_requests,
 			message_payload,
-			reasoning=DEFAULT_REASONING_SETTINGS,
 		):
 			slot = _apply_stream_chunk(
 				round_state,
