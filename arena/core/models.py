@@ -1,39 +1,63 @@
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 
 from arena.core.api import OpenRouterAPI
+from arena.core.reasoning import reasoning_capabilities_for_model
 
 
-def _fallback_model_catalog() -> list[dict[str, str]]:
+def _fallback_entry(
+	model_id: str,
+	provider_key: str,
+	provider_label: str,
+	model_label: str,
+	full_label: str,
+) -> dict[str, Any]:
+	entry: dict[str, Any] = {
+		"model_id": model_id,
+		"provider_key": provider_key,
+		"provider_label": provider_label,
+		"model_label": model_label,
+		"full_label": full_label,
+		"supported_parameters": [],
+		"default_parameters": {},
+		"top_provider": {},
+		"pricing": {},
+	}
+	entry["reasoning_capabilities"] = reasoning_capabilities_for_model(entry)
+	return entry
+
+
+def _fallback_model_catalog() -> list[dict[str, Any]]:
 	return [
-		{
-			"model_id": "openai/gpt-5.4-mini",
-			"provider_key": "openai",
-			"provider_label": "OpenAI",
-			"model_label": "GPT-5.4 Mini",
-			"full_label": "OpenAI: GPT-5.4 Mini",
-		},
-		{
-			"model_id": "anthropic/claude-sonnet-4.5",
-			"provider_key": "anthropic",
-			"provider_label": "Anthropic",
-			"model_label": "Claude Sonnet 4.5",
-			"full_label": "Anthropic: Claude Sonnet 4.5",
-		},
-		{
-			"model_id": "google/gemini-3.1-flash-lite-preview",
-			"provider_key": "google",
-			"provider_label": "Google",
-			"model_label": "Gemini 3.1 Flash Lite Preview",
-			"full_label": "Google: Gemini 3.1 Flash Lite Preview",
-		},
+		_fallback_entry(
+			"openai/gpt-5.4-mini",
+			"openai",
+			"OpenAI",
+			"GPT-5.4 Mini",
+			"OpenAI: GPT-5.4 Mini",
+		),
+		_fallback_entry(
+			"anthropic/claude-sonnet-4.5",
+			"anthropic",
+			"Anthropic",
+			"Claude Sonnet 4.5",
+			"Anthropic: Claude Sonnet 4.5",
+		),
+		_fallback_entry(
+			"google/gemini-3.1-flash-lite-preview",
+			"google",
+			"Google",
+			"Gemini 3.1 Flash Lite Preview",
+			"Google: Gemini 3.1 Flash Lite Preview",
+		),
 	]
 
 
 def _load_model_catalog(
 	site_url: str, site_name: str
-) -> tuple[list[dict[str, str]], str, str | None]:
+) -> tuple[list[dict[str, Any]], str, str | None]:
 	load_dotenv()
 	api_key = os.getenv("OPENROUTER_API_KEY")
 
@@ -69,8 +93,8 @@ def _load_model_catalog(
 
 
 def _build_provider_index(
-	model_catalog: list[dict[str, str]],
-) -> tuple[list[tuple[str, str]], dict[str, list[dict[str, str]]]]:
+	model_catalog: list[dict[str, Any]],
+) -> tuple[list[tuple[str, str]], dict[str, list[dict[str, Any]]]]:
 	provider_choices: list[tuple[str, str]] = []
 	provider_models: dict[str, list[dict[str, str]]] = {}
 
@@ -85,8 +109,8 @@ def _build_provider_index(
 
 
 def _default_model_ids(
-	model_catalog: list[dict[str, str]],
-	provider_models: dict[str, list[dict[str, str]]],
+	model_catalog: list[dict[str, Any]],
+	provider_models: dict[str, list[dict[str, Any]]],
 	default_model_ids: list[str],
 	panel_count: int,
 ) -> list[str]:
@@ -113,7 +137,7 @@ def _default_model_ids(
 	return resolved_default_ids
 
 
-def _chatbot_label(model_lookup: dict[str, dict[str, str]], model_id: str) -> str:
+def _chatbot_label(model_lookup: dict[str, dict[str, Any]], model_id: str) -> str:
 	entry = model_lookup.get(model_id)
 	if entry:
 		return entry["full_label"]
@@ -121,7 +145,7 @@ def _chatbot_label(model_lookup: dict[str, dict[str, str]], model_id: str) -> st
 
 
 def _provider_for_model(
-	model_lookup: dict[str, dict[str, str]],
+	model_lookup: dict[str, dict[str, Any]],
 	provider_choices: list[tuple[str, str]],
 	model_id: str,
 ) -> str:
@@ -134,8 +158,8 @@ def _provider_for_model(
 
 
 def _model_choices_for_provider(
-	provider_models: dict[str, list[dict[str, str]]],
-	model_catalog: list[dict[str, str]],
+	provider_models: dict[str, list[dict[str, Any]]],
+	model_catalog: list[dict[str, Any]],
 	provider_key: str,
 ) -> list[tuple[str, str]]:
 	provider_entries = provider_models.get(provider_key) or model_catalog
@@ -143,8 +167,8 @@ def _model_choices_for_provider(
 
 
 def _resolve_model_for_provider(
-	provider_models: dict[str, list[dict[str, str]]],
-	model_catalog: list[dict[str, str]],
+	provider_models: dict[str, list[dict[str, Any]]],
+	model_catalog: list[dict[str, Any]],
 	provider_key: str,
 	model_id: str | None = None,
 ) -> str:

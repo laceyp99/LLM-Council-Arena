@@ -7,7 +7,10 @@ from typing import Any, AsyncGenerator
 import httpx
 from dotenv import load_dotenv
 
+from arena.core.reasoning import reasoning_capabilities_for_model
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+REQUEST_CONTROL_KEYS = {"model", "slot", "model_entry", "reasoning_payload", "params"}
 
 
 def _to_float(value: Any) -> float | None:
@@ -166,6 +169,11 @@ class OpenRouterAPI:
 					"provider_label": provider_label,
 					"model_label": model_label or slug,
 					"full_label": full_name,
+					"supported_parameters": model.get("supported_parameters") or [],
+					"default_parameters": model.get("default_parameters") or {},
+					"top_provider": model.get("top_provider") or {},
+					"pricing": model.get("pricing") or {},
+					"reasoning_capabilities": reasoning_capabilities_for_model(model),
 				}
 			)
 
@@ -208,6 +216,34 @@ class OpenRouterAPI:
 
 		return requests
 
+	@staticmethod
+	def _request_payload_params(
+		request: dict[str, Any],
+		shared_kwargs: dict[str, Any],
+	) -> dict[str, Any]:
+		params = dict(shared_kwargs)
+		request_params = request.get("params")
+		if isinstance(request_params, dict):
+			params.update(request_params)
+
+		control_keys = set(REQUEST_CONTROL_KEYS)
+		if "reasoning_payload" in request:
+			control_keys.add("reasoning")
+			reasoning_payload = request.get("reasoning_payload")
+			if reasoning_payload is None:
+				params.pop("reasoning", None)
+			elif isinstance(reasoning_payload, dict):
+				params["reasoning"] = dict(reasoning_payload)
+			else:
+				params.pop("reasoning", None)
+
+		for key, value in request.items():
+			if key in control_keys:
+				continue
+			params[key] = value
+
+		return params
+
 	async def _prompt_model(
 		self,
 		client: httpx.AsyncClient,
@@ -218,11 +254,12 @@ class OpenRouterAPI:
 		"""Asynchronously prompt a single model and yield stream chunks."""
 		model = request["model"]
 		slot = request.get("slot")
+		request_params = self._request_payload_params(request, kwargs)
 		payload = {
 			"model": model,
 			"messages": messages,
 			"stream": True,  # Enable streaming
-			**kwargs,
+			**request_params,
 		}
 		request_started_at = time.perf_counter()
 		first_token_at: float | None = None

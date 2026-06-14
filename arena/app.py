@@ -26,6 +26,11 @@ from arena.core.models import (
 from arena.core.models import (
 	_resolve_model_for_provider as _catalog_resolve_model_for_provider,
 )
+from arena.core.reasoning import (
+	normalize_reasoning_payload,
+	reasoning_capabilities_for_model,
+	reasoning_cost_hint,
+)
 from arena.state.round import (
 	_build_round_state,
 	_default_display_order,
@@ -48,7 +53,6 @@ from arena.state.voting import (
 from arena.ui.config import (
 	APP_DIR,
 	DEFAULT_MODEL_IDS,
-	DEFAULT_REASONING_SETTINGS,
 	DEFAULT_SYSTEM_PROMPT,
 	LOGS_DIR,
 	META_LOG_FILE,
@@ -234,6 +238,7 @@ def _build_generation_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 				"status": slot_log.get("status") or "pending",
 				"error": slot_log.get("error"),
 				"final_response": slot_log.get("final_response") or "",
+				"reasoning_payload": slot_log.get("reasoning_payload"),
 				"reasoning_trace": slot_log.get("reasoning_trace") or "",
 				"reasoning_details": slot_log.get("reasoning_details") or [],
 				"usage": slot_log.get("usage") or {},
@@ -384,6 +389,47 @@ def _selectors_interactive() -> bool:
 	return not MODEL_CATALOG_STATUS.lower().startswith("warning:")
 
 
+def _reasoning_capabilities_for_model_id(model_id: str | None) -> dict[str, Any]:
+	return reasoning_capabilities_for_model(MODEL_LOOKUP.get(model_id or "", {}))
+
+
+def _reasoning_control_config(model_id: str | None) -> dict[str, dict[str, Any]]:
+	capabilities = _reasoning_capabilities_for_model_id(model_id)
+	control_type = capabilities.get("control_type")
+	interactive = _selectors_interactive()
+	cost_hint = reasoning_cost_hint(capabilities)
+
+	return {
+		"effort": {
+			"label": "Reasoning effort",
+			"choices": capabilities.get("effort_choices") or [],
+			"value": capabilities.get("default_effort"),
+			"visible": control_type == "effort",
+			"interactive": interactive,
+		},
+		"cost_hint": {
+			"value": cost_hint,
+			"visible": bool(cost_hint) and control_type != "none",
+		},
+	}
+
+
+def _reasoning_controls_for_model(model_id: str | None) -> tuple[Any, Any]:
+	config = _reasoning_control_config(model_id)
+	return (
+		gr.Dropdown(**config["effort"]),
+		gr.Markdown(**config["cost_hint"]),
+	)
+
+
+def _reasoning_control_updates(model_id: str | None) -> tuple[Any, Any]:
+	config = _reasoning_control_config(model_id)
+	return (
+		gr.update(**config["effort"]),
+		gr.update(**config["cost_hint"]),
+	)
+
+
 def _openrouter_status_banner() -> gr.HTML:
 	if _selectors_interactive():
 		return gr.HTML(value="", visible=False)
@@ -459,13 +505,34 @@ def update_panel_provider(provider_key: str):
 			value=resolved_model_id,
 			interactive=_selectors_interactive(),
 		),
+		*_reasoning_control_updates(resolved_model_id),
 		*_reset_arena_outputs(),
 	)
 
 
 def update_panel_model(model_id: str):
-	_ = model_id
-	return _reset_arena_outputs()
+	return (
+		*_reasoning_control_updates(model_id),
+		*_reset_arena_outputs(),
+	)
+
+
+def _prepare_reasoning_request(model_id: str, effort: str | None) -> dict[str, Any]:
+	model_entry = MODEL_LOOKUP.get(model_id, {})
+	reasoning_payload = normalize_reasoning_payload(model_entry, {"effort": effort})
+	reasoning_warning = None
+	if effort not in (None, "none") and reasoning_payload is None:
+		model_label = _chatbot_label(model_id) if model_id else "This model"
+		reasoning_warning = (
+			f"Reasoning effort '{effort}' was selected, but {model_label} does not "
+			"support an applied reasoning payload. The request will continue without "
+			"reasoning controls."
+		)
+	return {
+		"model_entry": model_entry,
+		"reasoning_payload": reasoning_payload,
+		"reasoning_warning": reasoning_warning,
+	}
 
 
 def submit_vote(round_state: dict[str, Any] | None):
@@ -704,6 +771,9 @@ async def stream_all_models(
 	panel_1_model: str,
 	panel_2_model: str,
 	panel_3_model: str,
+	panel_1_reasoning_effort: str | None = None,
+	panel_2_reasoning_effort: str | None = None,
+	panel_3_reasoning_effort: str | None = None,
 ):
 	user_text = (user_text or "").strip()
 	if not user_text:
@@ -712,6 +782,11 @@ async def stream_all_models(
 	model_ids = [panel_1_model, panel_2_model, panel_3_model]
 	message_payload = _build_messages(user_text, system_prompt)
 	display_order = _shuffled_display_order()
+	reasoning_requests = [
+		_prepare_reasoning_request(panel_1_model, panel_1_reasoning_effort),
+		_prepare_reasoning_request(panel_2_model, panel_2_reasoning_effort),
+		_prepare_reasoning_request(panel_3_model, panel_3_reasoning_effort),
+	]
 	round_state = _build_round_state(
 		user_text,
 		system_prompt,
@@ -721,6 +796,9 @@ async def stream_all_models(
 		chatbot_label=_chatbot_label,
 		provider_for_model=_provider_for_model,
 	)
+	for slot, request_metadata in enumerate(reasoning_requests):
+		round_state["slot_logs"][slot]["reasoning_payload"] = request_metadata["reasoning_payload"]
+
 	histories = [
 		[
 			{"role": "user", "content": user_text},
@@ -731,6 +809,19 @@ async def stream_all_models(
 	reasoning_message_indices: list[int | None] = [None for _ in range(PANEL_COUNT)]
 	completed_slots: set[int] = set()
 	errored_slots: set[int] = set()
+
+	for slot, request_metadata in enumerate(reasoning_requests):
+		reasoning_warning = request_metadata.get("reasoning_warning")
+		if isinstance(reasoning_warning, str) and reasoning_warning:
+			histories[slot].append(
+				{
+					"role": "assistant",
+					"content": f"[Warning] {reasoning_warning}",
+				}
+			)
+	_finalize_round_state_logs(
+		round_state, histories, assistant_message_indices, reasoning_message_indices
+	)
 
 	yield _streaming_outputs(
 		user_input="",
@@ -787,6 +878,8 @@ async def stream_all_models(
 		{
 			"slot": slot,
 			"model": model_id,
+			"model_entry": reasoning_requests[slot]["model_entry"],
+			"reasoning_payload": reasoning_requests[slot]["reasoning_payload"],
 		}
 		for slot, model_id in enumerate(model_ids)
 	]
@@ -795,7 +888,6 @@ async def stream_all_models(
 		async for chunk in api.prompt_models_concurrent(
 			prompt_requests,
 			message_payload,
-			reasoning=DEFAULT_REASONING_SETTINGS,
 		):
 			slot = _apply_stream_chunk(
 				round_state,
@@ -904,6 +996,10 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						value=DEFAULT_PANEL_MODEL_IDS[0],
 						interactive=_selectors_interactive(),
 					)
+					(
+						panel_1_reasoning_effort,
+						panel_1_reasoning_cost_hint,
+					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[0])
 
 				with gr.Column(scale=1):
 					panel_2_provider = gr.Dropdown(
@@ -918,6 +1014,10 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						value=DEFAULT_PANEL_MODEL_IDS[1],
 						interactive=_selectors_interactive(),
 					)
+					(
+						panel_2_reasoning_effort,
+						panel_2_reasoning_cost_hint,
+					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[1])
 
 				with gr.Column(scale=1):
 					panel_3_provider = gr.Dropdown(
@@ -932,6 +1032,10 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 						value=DEFAULT_PANEL_MODEL_IDS[2],
 						interactive=_selectors_interactive(),
 					)
+					(
+						panel_3_reasoning_effort,
+						panel_3_reasoning_cost_hint,
+					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[2])
 
 			with gr.Accordion("System Prompt", open=False):
 				system_prompt = gr.Textbox(
@@ -989,13 +1093,24 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		vote_submit_btn,
 		vote_status_banner,
 	]
-	submit_inputs = [user_input, system_prompt, panel_1_model, panel_2_model, panel_3_model]
+	submit_inputs = [
+		user_input,
+		system_prompt,
+		panel_1_model,
+		panel_2_model,
+		panel_3_model,
+		panel_1_reasoning_effort,
+		panel_2_reasoning_effort,
+		panel_3_reasoning_effort,
+	]
 
 	panel_1_provider.change(
 		fn=update_panel_provider,
 		inputs=[panel_1_provider],
 		outputs=[
 			panel_1_model,
+			panel_1_reasoning_effort,
+			panel_1_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1013,6 +1128,8 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		inputs=[panel_2_provider],
 		outputs=[
 			panel_2_model,
+			panel_2_reasoning_effort,
+			panel_2_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1030,6 +1147,8 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		inputs=[panel_3_provider],
 		outputs=[
 			panel_3_model,
+			panel_3_reasoning_effort,
+			panel_3_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1047,6 +1166,8 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		fn=update_panel_model,
 		inputs=[panel_1_model],
 		outputs=[
+			panel_1_reasoning_effort,
+			panel_1_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1063,6 +1184,8 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		fn=update_panel_model,
 		inputs=[panel_2_model],
 		outputs=[
+			panel_2_reasoning_effort,
+			panel_2_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1079,6 +1202,8 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 		fn=update_panel_model,
 		inputs=[panel_3_model],
 		outputs=[
+			panel_3_reasoning_effort,
+			panel_3_reasoning_cost_hint,
 			panel_1_chat,
 			panel_2_chat,
 			panel_3_chat,
@@ -1091,7 +1216,6 @@ with gr.Blocks(title="LLM Council Arena") as demo:
 			vote_status_banner,
 		],
 	)
-
 	user_input.submit(
 		fn=stream_all_models,
 		inputs=submit_inputs,

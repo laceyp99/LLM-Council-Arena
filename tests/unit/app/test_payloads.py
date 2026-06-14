@@ -27,6 +27,7 @@ def _sample_round_state() -> dict[str, object]:
 				"status": "complete",
 				"error": None,
 				"final_response": "Answer one",
+				"reasoning_payload": None,
 				"reasoning_trace": "Thought one",
 				"reasoning_details": [{"type": "reasoning.text", "text": "Thought one"}],
 				"usage": {"completion_tokens": 11},
@@ -46,6 +47,7 @@ def _sample_round_state() -> dict[str, object]:
 				"status": "error",
 				"error": "timeout",
 				"final_response": "",
+				"reasoning_payload": {"effort": "none"},
 				"reasoning_trace": "",
 				"reasoning_details": [],
 				"usage": {},
@@ -65,6 +67,7 @@ def _sample_round_state() -> dict[str, object]:
 				"status": "complete",
 				"error": None,
 				"final_response": "Answer three",
+				"reasoning_payload": {"effort": "high", "exclude": False},
 				"reasoning_trace": "Thought three",
 				"reasoning_details": [{"type": "reasoning.summary", "summary": "Summary"}],
 				"usage": {"completion_tokens": 22},
@@ -112,7 +115,13 @@ def test_build_generation_payload_includes_generation_stats_and_usage() -> None:
 	assert generation_payload["round_id"] == "round-1"
 	assert generation_payload["panels"][0]["status"] == "complete"
 	assert generation_payload["panels"][0]["completion_tokens"] == 11
+	assert generation_payload["panels"][0]["reasoning_payload"] is None
+	assert "reasoning_settings" not in generation_payload["panels"][0]
 	assert generation_payload["panels"][2]["reasoning_details"][0]["summary"] == "Summary"
+	assert generation_payload["panels"][2]["reasoning_payload"] == {
+		"effort": "high",
+		"exclude": False,
+	}
 
 
 def test_update_meta_log_aggregates_model_totals_and_round_summary(monkeypatch, tmp_path) -> None:

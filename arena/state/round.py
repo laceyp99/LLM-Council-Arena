@@ -42,6 +42,7 @@ def _empty_slot_log(
 		"status": "pending",
 		"error": None,
 		"final_response": "",
+		"reasoning_payload": None,
 		"reasoning_trace": "",
 		"reasoning_details": [],
 		"usage": {},

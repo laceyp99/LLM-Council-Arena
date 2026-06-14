@@ -106,6 +106,44 @@ async def test_prompt_model_merges_reasoning_and_emits_completion_stats(monkeypa
 
 
 @pytest.mark.anyio
+async def test_prompt_model_prefers_request_specific_payload_params(monkeypatch) -> None:
+	perf_values = iter([10.0, 10.5])
+	monkeypatch.setattr(api_module.time, "perf_counter", lambda: next(perf_values))
+	response = _FakeStreamResponse(
+		[
+			'data: {"usage":{"completion_tokens":1},"choices":[{"finish_reason":"stop","delta":{}}]}',
+			"data: [DONE]",
+		]
+	)
+	client = _FakeAsyncClient(response)
+	api = api_module.OpenRouterAPI(api_key="test-api-key")
+
+	chunks = [
+		chunk
+		async for chunk in api._prompt_model(
+			client,
+			{
+				"slot": 1,
+				"model": "alpha/one",
+				"temperature": 0.8,
+				"model_entry": {
+					"supported_parameters": ["reasoning.max_tokens"],
+					"top_provider": {"max_completion_tokens": 10_000},
+				},
+				"reasoning_payload": None,
+			},
+			[{"role": "user", "content": "Compare models."}],
+			temperature=0.2,
+			reasoning={"enabled": True},
+		)
+	]
+
+	assert client.calls[0]["json"]["temperature"] == 0.8
+	assert "reasoning" not in client.calls[0]["json"]
+	assert chunks[0]["event"] == "complete"
+
+
+@pytest.mark.anyio
 async def test_prompt_model_uses_legacy_reasoning_and_skips_malformed_lines(monkeypatch) -> None:
 	chunks, _ = await _collect_prompt_chunks(
 		[
