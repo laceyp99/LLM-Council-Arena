@@ -363,6 +363,22 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 	_stub_ui_helpers(monkeypatch)
 	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
 	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(
+		app_module,
+		"MODEL_LOOKUP",
+		{
+			"beta/two": {
+				"full_label": "Beta Two",
+				"provider_key": "beta",
+				"supported_parameters": ["reasoning"],
+			},
+			"gamma/three": {
+				"full_label": "Gamma Three",
+				"provider_key": "gamma",
+				"supported_parameters": ["reasoning"],
+			},
+		},
+	)
 	requests = _fake_streaming_api(
 		monkeypatch,
 		[
@@ -420,19 +436,27 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 			"slot": 0,
 			"model": "alpha/one",
 			"model_entry": {},
-			"reasoning_settings": {"effort": None},
+			"reasoning_payload": None,
 		},
 		{
 			"slot": 1,
 			"model": "beta/two",
-			"model_entry": {},
-			"reasoning_settings": {"effort": "none"},
+			"model_entry": {
+				"full_label": "Beta Two",
+				"provider_key": "beta",
+				"supported_parameters": ["reasoning"],
+			},
+			"reasoning_payload": {"effort": "none"},
 		},
 		{
 			"slot": 2,
 			"model": "gamma/three",
-			"model_entry": {},
-			"reasoning_settings": {"effort": "high"},
+			"model_entry": {
+				"full_label": "Gamma Three",
+				"provider_key": "gamma",
+				"supported_parameters": ["reasoning"],
+			},
+			"reasoning_payload": {"effort": "high", "exclude": False},
 		},
 	]
 	assert requests[1]["kwargs"] == {}
@@ -441,17 +465,55 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 	assert final_round_state["completed_slots"] == [0, 1, 2]
 	assert final_round_state["errored_slots"] == []
 	assert final_round_state["slot_logs"][0]["final_response"] == "Alpha answer"
-	assert final_round_state["slot_logs"][0]["reasoning_settings"] == {
-		"effort": None,
-	}
+	assert final_round_state["slot_logs"][0]["reasoning_payload"] is None
 	assert final_round_state["slot_logs"][1]["reasoning_trace"] == "**Summary**\n\nBeta summary"
-	assert final_round_state["slot_logs"][1]["reasoning_settings"] == {
-		"effort": "none",
-	}
+	assert final_round_state["slot_logs"][1]["reasoning_payload"] == {"effort": "none"}
 	assert final_round_state["slot_logs"][2]["completion_tokens"] == 30
-	assert final_round_state["slot_logs"][2]["reasoning_settings"] == {
+	assert final_round_state["slot_logs"][2]["reasoning_payload"] == {
 		"effort": "high",
+		"exclude": False,
 	}
+
+
+@pytest.mark.anyio
+async def test_stream_all_models_warns_when_selected_reasoning_is_unsupported(
+	monkeypatch,
+) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
+	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(app_module, "MODEL_LOOKUP", {})
+	requests = _fake_streaming_api(
+		monkeypatch,
+		[
+			{"slot": 0, "delta": "Alpha answer"},
+			{"slot": 0, "event": "complete", "usage": {}, "stats": {}},
+			{"slot": 1, "delta": "Beta answer"},
+			{"slot": 1, "event": "complete", "usage": {}, "stats": {}},
+			{"slot": 2, "delta": "Gamma answer"},
+			{"slot": 2, "event": "complete", "usage": {}, "stats": {}},
+		],
+	)
+
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+		None,
+		"high",
+		None,
+	)
+
+	final_round_state = outputs[-1][4]
+
+	assert requests[1]["prompt_requests"][1]["reasoning_payload"] is None
+	assert final_round_state["slot_logs"][1]["reasoning_payload"] is None
+	assert final_round_state["slot_logs"][1]["final_response"] == "Beta answer"
+	assert final_round_state["slot_logs"][1]["message_history"][1]["content"].startswith(
+		"[Warning] Reasoning effort 'high' was selected"
+	)
 
 
 @pytest.mark.anyio

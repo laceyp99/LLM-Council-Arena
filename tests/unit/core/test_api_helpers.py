@@ -410,16 +410,13 @@ def test_request_payload_params_merge_shared_and_request_specific_values() -> No
 	assert params == {"temperature": 0.7, "max_tokens": 1000, "top_p": 0.8}
 
 
-def test_request_payload_params_sanitizes_reasoning_from_model_metadata() -> None:
+def test_request_payload_params_uses_explicit_reasoning_payload() -> None:
 	params = OpenRouterAPI._request_payload_params(
 		{
 			"slot": 0,
 			"model": "alpha/one",
-			"model_entry": {
-				"supported_parameters": ["reasoning.effort", "reasoning.max_tokens"],
-				"top_provider": {"max_completion_tokens": 20_000},
-			},
-			"reasoning_settings": {"effort": "medium", "max_tokens": 18_000},
+			"model_entry": {"supported_parameters": []},
+			"reasoning_payload": {"effort": "medium", "exclude": False},
 			"reasoning": {"max_tokens": 18_000},
 		},
 		{"reasoning": {"enabled": True}},
@@ -428,13 +425,13 @@ def test_request_payload_params_sanitizes_reasoning_from_model_metadata() -> Non
 	assert params == {"reasoning": {"effort": "medium", "exclude": False}}
 
 
-def test_request_payload_params_removes_shared_reasoning_for_unsupported_model() -> None:
+def test_request_payload_params_removes_shared_reasoning_for_omitted_payload() -> None:
 	params = OpenRouterAPI._request_payload_params(
 		{
 			"slot": 0,
 			"model": "alpha/one",
 			"model_entry": {"supported_parameters": []},
-			"reasoning_settings": {"enabled": True},
+			"reasoning_payload": None,
 		},
 		{"reasoning": {"enabled": True}, "temperature": 0.2},
 	)

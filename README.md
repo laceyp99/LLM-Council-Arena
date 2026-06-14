@@ -110,7 +110,7 @@ The app writes local JSON artifacts during use:
 - `votes.json`: append-only vote records
 - `arena_logs/meta.json`: aggregate leaderboard and round summary data
 - `arena_logs/sessions/<timestamp>_<round_id>/round.json`: round metadata
-- `arena_logs/sessions/<timestamp>_<round_id>/generation.json`: generation output, errors, requested reasoning settings, token/cost stats, and reasoning details
+- `arena_logs/sessions/<timestamp>_<round_id>/generation.json`: generation output, errors, applied reasoning payloads, token/cost stats, and reasoning details
 - `arena_logs/sessions/<timestamp>_<round_id>/histories.json`: serialized chat histories per panel
 - `arena_logs/sessions/<timestamp>_<round_id>/vote.json`: submitted ranking order
 

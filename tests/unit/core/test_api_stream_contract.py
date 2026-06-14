@@ -130,7 +130,7 @@ async def test_prompt_model_prefers_request_specific_payload_params(monkeypatch)
 					"supported_parameters": ["reasoning.max_tokens"],
 					"top_provider": {"max_completion_tokens": 10_000},
 				},
-				"reasoning_settings": {"enabled": True, "max_tokens": 9500},
+				"reasoning_payload": None,
 			},
 			[{"role": "user", "content": "Compare models."}],
 			temperature=0.2,

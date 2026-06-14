@@ -26,7 +26,11 @@ from arena.core.models import (
 from arena.core.models import (
 	_resolve_model_for_provider as _catalog_resolve_model_for_provider,
 )
-from arena.core.reasoning import reasoning_capabilities_for_model, reasoning_cost_hint
+from arena.core.reasoning import (
+	normalize_reasoning_payload,
+	reasoning_capabilities_for_model,
+	reasoning_cost_hint,
+)
 from arena.state.round import (
 	_build_round_state,
 	_default_display_order,
@@ -234,7 +238,7 @@ def _build_generation_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 				"status": slot_log.get("status") or "pending",
 				"error": slot_log.get("error"),
 				"final_response": slot_log.get("final_response") or "",
-				"reasoning_settings": slot_log.get("reasoning_settings") or {},
+				"reasoning_payload": slot_log.get("reasoning_payload"),
 				"reasoning_trace": slot_log.get("reasoning_trace") or "",
 				"reasoning_details": slot_log.get("reasoning_details") or [],
 				"usage": slot_log.get("usage") or {},
@@ -513,8 +517,22 @@ def update_panel_model(model_id: str):
 	)
 
 
-def _reasoning_settings_from_controls(effort: str | None) -> dict[str, Any]:
-	return {"effort": effort}
+def _prepare_reasoning_request(model_id: str, effort: str | None) -> dict[str, Any]:
+	model_entry = MODEL_LOOKUP.get(model_id, {})
+	reasoning_payload = normalize_reasoning_payload(model_entry, {"effort": effort})
+	reasoning_warning = None
+	if effort not in (None, "none") and reasoning_payload is None:
+		model_label = _chatbot_label(model_id) if model_id else "This model"
+		reasoning_warning = (
+			f"Reasoning effort '{effort}' was selected, but {model_label} does not "
+			"support an applied reasoning payload. The request will continue without "
+			"reasoning controls."
+		)
+	return {
+		"model_entry": model_entry,
+		"reasoning_payload": reasoning_payload,
+		"reasoning_warning": reasoning_warning,
+	}
 
 
 def submit_vote(round_state: dict[str, Any] | None):
@@ -764,10 +782,10 @@ async def stream_all_models(
 	model_ids = [panel_1_model, panel_2_model, panel_3_model]
 	message_payload = _build_messages(user_text, system_prompt)
 	display_order = _shuffled_display_order()
-	reasoning_settings = [
-		_reasoning_settings_from_controls(panel_1_reasoning_effort),
-		_reasoning_settings_from_controls(panel_2_reasoning_effort),
-		_reasoning_settings_from_controls(panel_3_reasoning_effort),
+	reasoning_requests = [
+		_prepare_reasoning_request(panel_1_model, panel_1_reasoning_effort),
+		_prepare_reasoning_request(panel_2_model, panel_2_reasoning_effort),
+		_prepare_reasoning_request(panel_3_model, panel_3_reasoning_effort),
 	]
 	round_state = _build_round_state(
 		user_text,
@@ -778,8 +796,8 @@ async def stream_all_models(
 		chatbot_label=_chatbot_label,
 		provider_for_model=_provider_for_model,
 	)
-	for slot, settings in enumerate(reasoning_settings):
-		round_state["slot_logs"][slot]["reasoning_settings"] = dict(settings)
+	for slot, request_metadata in enumerate(reasoning_requests):
+		round_state["slot_logs"][slot]["reasoning_payload"] = request_metadata["reasoning_payload"]
 
 	histories = [
 		[
@@ -791,6 +809,19 @@ async def stream_all_models(
 	reasoning_message_indices: list[int | None] = [None for _ in range(PANEL_COUNT)]
 	completed_slots: set[int] = set()
 	errored_slots: set[int] = set()
+
+	for slot, request_metadata in enumerate(reasoning_requests):
+		reasoning_warning = request_metadata.get("reasoning_warning")
+		if isinstance(reasoning_warning, str) and reasoning_warning:
+			histories[slot].append(
+				{
+					"role": "assistant",
+					"content": f"[Warning] {reasoning_warning}",
+				}
+			)
+	_finalize_round_state_logs(
+		round_state, histories, assistant_message_indices, reasoning_message_indices
+	)
 
 	yield _streaming_outputs(
 		user_input="",
@@ -847,8 +878,8 @@ async def stream_all_models(
 		{
 			"slot": slot,
 			"model": model_id,
-			"model_entry": MODEL_LOOKUP.get(model_id, {}),
-			"reasoning_settings": reasoning_settings[slot],
+			"model_entry": reasoning_requests[slot]["model_entry"],
+			"reasoning_payload": reasoning_requests[slot]["reasoning_payload"],
 		}
 		for slot, model_id in enumerate(model_ids)
 	]

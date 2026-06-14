@@ -7,10 +7,10 @@ from typing import Any, AsyncGenerator
 import httpx
 from dotenv import load_dotenv
 
-from arena.core.reasoning import normalize_reasoning_payload, reasoning_capabilities_for_model
+from arena.core.reasoning import reasoning_capabilities_for_model
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-REQUEST_CONTROL_KEYS = {"model", "slot", "model_entry", "reasoning_settings", "params"}
+REQUEST_CONTROL_KEYS = {"model", "slot", "model_entry", "reasoning_payload", "params"}
 
 
 def _to_float(value: Any) -> float | None:
@@ -226,16 +226,16 @@ class OpenRouterAPI:
 		if isinstance(request_params, dict):
 			params.update(request_params)
 
-		model_entry = request.get("model_entry")
-		reasoning_settings = request.get("reasoning_settings")
 		control_keys = set(REQUEST_CONTROL_KEYS)
-		if isinstance(model_entry, dict):
+		if "reasoning_payload" in request:
 			control_keys.add("reasoning")
-			reasoning_payload = normalize_reasoning_payload(model_entry, reasoning_settings)
+			reasoning_payload = request.get("reasoning_payload")
 			if reasoning_payload is None:
 				params.pop("reasoning", None)
+			elif isinstance(reasoning_payload, dict):
+				params["reasoning"] = dict(reasoning_payload)
 			else:
-				params["reasoning"] = reasoning_payload
+				params.pop("reasoning", None)
 
 		for key, value in request.items():
 			if key in control_keys:
