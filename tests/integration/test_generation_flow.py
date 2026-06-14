@@ -1,3 +1,5 @@
+import json
+
 import gradio as gr
 import pytest
 
@@ -75,6 +77,44 @@ class _NoopAsyncClient:
 
 	async def __aenter__(self):
 		return self
+
+	async def __aexit__(self, exc_type, exc, tb) -> None:
+		return None
+
+
+class _CapturedStreamResponse:
+	def __init__(self, model: str) -> None:
+		self.model = model
+
+	def raise_for_status(self) -> None:
+		return None
+
+	async def aiter_lines(self):
+		yield "data: " + json.dumps(
+			{
+				"choices": [
+					{
+						"delta": {"content": f"{self.model} answer"},
+						"finish_reason": None,
+					}
+				]
+			}
+		)
+		yield "data: " + json.dumps(
+			{
+				"choices": [{"delta": {}, "finish_reason": "stop"}],
+				"usage": {"completion_tokens": 3},
+			}
+		)
+		yield "data: [DONE]"
+
+
+class _CapturedStreamContext:
+	def __init__(self, response: _CapturedStreamResponse) -> None:
+		self.response = response
+
+	async def __aenter__(self) -> _CapturedStreamResponse:
+		return self.response
 
 	async def __aexit__(self, exc_type, exc, tb) -> None:
 		return None
@@ -473,6 +513,95 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 		"effort": "high",
 		"exclude": False,
 	}
+
+
+@pytest.mark.anyio
+async def test_stream_all_models_emits_reasoning_payload_through_openrouter_request(
+	monkeypatch,
+) -> None:
+	_stub_ui_helpers(monkeypatch)
+	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
+	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(
+		app_module,
+		"MODEL_LOOKUP",
+		{
+			"alpha/one": {
+				"full_label": "Alpha One",
+				"provider_key": "alpha",
+				"supported_parameters": [],
+			},
+			"beta/two": {
+				"full_label": "Beta Two",
+				"provider_key": "beta",
+				"supported_parameters": ["reasoning"],
+			},
+			"gamma/three": {
+				"full_label": "Gamma Three",
+				"provider_key": "gamma",
+				"supported_parameters": ["reasoning"],
+			},
+		},
+	)
+
+	captured_payloads: list[dict[str, object]] = []
+
+	class CapturingAsyncClient:
+		def __init__(self, *args, **kwargs) -> None:
+			self.args = args
+			self.kwargs = kwargs
+
+		async def __aenter__(self):
+			return self
+
+		async def __aexit__(self, exc_type, exc, tb) -> None:
+			return None
+
+		def stream(self, method, url, headers, json):
+			captured_payloads.append(
+				{
+					"method": method,
+					"url": url,
+					"headers": headers,
+					"json": json,
+				}
+			)
+			return _CapturedStreamContext(_CapturedStreamResponse(json["model"]))
+
+	monkeypatch.setattr(api_module.httpx, "AsyncClient", CapturingAsyncClient)
+
+	outputs = await _collect_stream_outputs(
+		"Compare models.",
+		"System prompt",
+		"alpha/one",
+		"beta/two",
+		"gamma/three",
+		None,
+		"none",
+		"high",
+	)
+
+	payloads_by_model = {payload["json"]["model"]: payload["json"] for payload in captured_payloads}
+	final_round_state = outputs[-1][4]
+
+	assert payloads_by_model["alpha/one"] == {
+		"model": "alpha/one",
+		"messages": [
+			{"role": "system", "content": "System prompt"},
+			{"role": "user", "content": "Compare models."},
+		],
+		"stream": True,
+	}
+	assert payloads_by_model["beta/two"]["reasoning"] == {"effort": "none"}
+	assert payloads_by_model["gamma/three"]["reasoning"] == {
+		"effort": "high",
+		"exclude": False,
+	}
+	assert all(
+		"model_entry" not in payload["json"] and "reasoning_payload" not in payload["json"]
+		for payload in captured_payloads
+	)
+	assert final_round_state["ready_for_vote"] is True
 
 
 @pytest.mark.anyio
