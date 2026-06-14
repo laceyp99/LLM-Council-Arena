@@ -109,15 +109,11 @@ def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
 		supports_effort or supports_max_tokens or "reasoning" in supported_parameters
 	)
 	max_completion_tokens = _positive_int(top_provider.get("max_completion_tokens"))
-	has_budget_slider = supports_max_tokens and max_completion_tokens is not None
+	has_token_ceiling = supports_max_tokens and max_completion_tokens is not None
 
 	control_type = "none"
 	if supports_effort:
 		control_type = "effort"
-	elif has_budget_slider:
-		control_type = "budget"
-	elif supports_reasoning:
-		control_type = "toggle"
 
 	default_effort = default_reasoning.get("effort")
 	if default_effort not in OPENROUTER_REASONING_EFFORT_CHOICES:
@@ -126,13 +122,13 @@ def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
 	default_max_tokens = _positive_int(default_reasoning.get("max_tokens"))
 	max_reasoning_tokens = (
 		int(max_completion_tokens * REASONING_TOKEN_BUDGET_OUTPUT_RATIO)
-		if has_budget_slider
+		if has_token_ceiling
 		else None
 	)
 
 	if default_max_tokens is not None and max_reasoning_tokens is not None:
 		default_max_tokens = min(default_max_tokens, max_reasoning_tokens)
-	elif not has_budget_slider:
+	elif not has_token_ceiling:
 		default_max_tokens = None
 
 	return {
@@ -158,29 +154,12 @@ def normalize_reasoning_payload(
 
 	capabilities = reasoning_capabilities_for_model(model)
 	control_type = capabilities["control_type"]
-	if not capabilities["supported"] or control_type == "none":
+	if control_type != "effort":
 		return None
 
-	if control_type == "effort":
-		effort = settings.get("effort")
-		if effort not in capabilities["effort_choices"]:
-			return None
-		if effort == "none":
-			return {"effort": "none"}
-		return {"effort": effort, "exclude": False}
-
-	if control_type == "budget":
-		if not settings.get("enabled"):
-			return None
-		max_tokens = _positive_int(settings.get("max_tokens"))
-		max_reasoning_tokens = _positive_int(capabilities.get("max_reasoning_tokens"))
-		if max_tokens is None or max_reasoning_tokens is None:
-			return None
-		return {"max_tokens": min(max_tokens, max_reasoning_tokens), "exclude": False}
-
-	if control_type == "toggle":
-		if not settings.get("enabled"):
-			return None
-		return {"enabled": True, "exclude": False}
-
-	return None
+	effort = settings.get("effort")
+	if effort not in capabilities["effort_choices"]:
+		return None
+	if effort == "none":
+		return {"effort": "none"}
+	return {"effort": effort, "exclude": False}

@@ -33,8 +33,7 @@ parameters, the app hides the reasoning controls for that panel.
 Depending on the selected model, the selector area may show:
 
 - An effort dropdown for models that support OpenRouter reasoning effort values.
-- An enable toggle plus a token-budget slider for models that support reasoning token budgets.
-- An enable toggle only when the model supports reasoning but does not expose a more specific control.
+- No reasoning control for models that do not expose effort levels.
 
 When reasoning is actively requested, the app asks OpenRouter to expose reasoning traces by
 sending `exclude: false`. Unsupported reasoning fields are omitted from the request payload

@@ -33,14 +33,8 @@ async def _collect_stream_outputs(*args: object) -> list[tuple[object, ...]]:
 	if len(args) == 5:
 		args = (
 			*args,
-			False,
-			4096,
 			"medium",
-			False,
-			4096,
 			"medium",
-			False,
-			4096,
 			"medium",
 		)
 	return [output async for output in app_module.stream_all_models(*args)]
@@ -413,14 +407,8 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 		"alpha/one",
 		"beta/two",
 		"gamma/three",
-		True,
-		2048.0,
 		None,
-		False,
-		4096,
 		"none",
-		False,
-		None,
 		"high",
 	)
 
@@ -432,19 +420,19 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 			"slot": 0,
 			"model": "alpha/one",
 			"model_entry": {},
-			"reasoning_settings": {"enabled": True, "max_tokens": 2048, "effort": None},
+			"reasoning_settings": {"effort": None},
 		},
 		{
 			"slot": 1,
 			"model": "beta/two",
 			"model_entry": {},
-			"reasoning_settings": {"enabled": False, "max_tokens": 4096, "effort": "none"},
+			"reasoning_settings": {"effort": "none"},
 		},
 		{
 			"slot": 2,
 			"model": "gamma/three",
 			"model_entry": {},
-			"reasoning_settings": {"enabled": False, "max_tokens": None, "effort": "high"},
+			"reasoning_settings": {"effort": "high"},
 		},
 	]
 	assert requests[1]["kwargs"] == {}
@@ -454,20 +442,14 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 	assert final_round_state["errored_slots"] == []
 	assert final_round_state["slot_logs"][0]["final_response"] == "Alpha answer"
 	assert final_round_state["slot_logs"][0]["reasoning_settings"] == {
-		"enabled": True,
-		"max_tokens": 2048,
 		"effort": None,
 	}
 	assert final_round_state["slot_logs"][1]["reasoning_trace"] == "**Summary**\n\nBeta summary"
 	assert final_round_state["slot_logs"][1]["reasoning_settings"] == {
-		"enabled": False,
-		"max_tokens": 4096,
 		"effort": "none",
 	}
 	assert final_round_state["slot_logs"][2]["completion_tokens"] == 30
 	assert final_round_state["slot_logs"][2]["reasoning_settings"] == {
-		"enabled": False,
-		"max_tokens": None,
 		"effort": "high",
 	}
 

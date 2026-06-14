@@ -139,7 +139,7 @@ async def test_prompt_model_prefers_request_specific_payload_params(monkeypatch)
 	]
 
 	assert client.calls[0]["json"]["temperature"] == 0.8
-	assert client.calls[0]["json"]["reasoning"] == {"max_tokens": 9000, "exclude": False}
+	assert "reasoning" not in client.calls[0]["json"]
 	assert chunks[0]["event"] == "complete"
 
 

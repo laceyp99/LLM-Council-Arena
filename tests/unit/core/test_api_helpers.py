@@ -183,7 +183,7 @@ def test_reasoning_capabilities_use_effort_for_generic_reasoning_support() -> No
 	assert capabilities["supports_max_tokens"] is False
 
 
-def test_reasoning_capabilities_favor_effort_controls_over_token_budget() -> None:
+def test_reasoning_capabilities_favor_effort_controls_over_token_metadata() -> None:
 	capabilities = reasoning_capabilities_for_model(
 		{
 			"supported_parameters": ["reasoning", "reasoning.effort", "reasoning.max_tokens"],
@@ -299,7 +299,7 @@ def test_reasoning_capabilities_detect_gemini_openrouter_effort_models() -> None
 	assert capabilities["max_reasoning_tokens"] == 58_982
 
 
-def test_reasoning_capabilities_allow_large_token_budgets_from_provider_metadata() -> None:
+def test_reasoning_capabilities_hide_budget_only_models() -> None:
 	capabilities = reasoning_capabilities_for_model(
 		{
 			"supported_parameters": ["reasoning.max_tokens"],
@@ -307,7 +307,9 @@ def test_reasoning_capabilities_allow_large_token_budgets_from_provider_metadata
 		}
 	)
 
-	assert capabilities["control_type"] == "budget"
+	assert capabilities["control_type"] == "none"
+	assert capabilities["supports_effort"] is False
+	assert capabilities["supports_max_tokens"] is True
 	assert capabilities["max_reasoning_tokens"] == 180_000
 
 
@@ -374,20 +376,17 @@ def test_normalize_reasoning_payload_keeps_openrouter_effort_for_reasoning_model
 	}
 
 
-def test_normalize_reasoning_payload_builds_budget_payloads() -> None:
+def test_normalize_reasoning_payload_omits_budget_only_models() -> None:
 	model = {
 		"supported_parameters": ["reasoning.max_tokens"],
 		"top_provider": {"max_completion_tokens": 10_000},
 	}
 
-	assert normalize_reasoning_payload(model, {"enabled": True, "max_tokens": 9500}) == {
-		"max_tokens": 9000,
-		"exclude": False,
-	}
+	assert normalize_reasoning_payload(model, {"enabled": True, "max_tokens": 9500}) is None
 	assert normalize_reasoning_payload(model, {"enabled": False, "max_tokens": 4096}) is None
 
 
-def test_normalize_reasoning_payload_uses_toggle_when_budget_ceiling_is_missing() -> None:
+def test_normalize_reasoning_payload_uses_effort_when_budget_ceiling_is_missing() -> None:
 	model = {"supported_parameters": ["reasoning", "reasoning.max_tokens"]}
 
 	assert normalize_reasoning_payload(model, {"enabled": True, "max_tokens": 4096}) is None

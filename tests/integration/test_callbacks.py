@@ -68,8 +68,6 @@ def test_update_panel_provider_resolves_model_choices_and_resets_outputs(monkeyp
 		app_module,
 		"_reasoning_control_updates",
 		lambda model_id: (
-			"reasoning-enabled",
-			"reasoning-budget",
 			"reasoning-effort",
 			"reasoning-cost-hint",
 		),
@@ -95,8 +93,6 @@ def test_update_panel_provider_resolves_model_choices_and_resets_outputs(monkeyp
 
 	assert outputs == (
 		{"choices": [("Two", "beta/two")], "value": "beta/two", "interactive": True},
-		"reasoning-enabled",
-		"reasoning-budget",
 		"reasoning-effort",
 		"reasoning-cost-hint",
 		*reset_outputs,
@@ -120,16 +116,12 @@ def test_update_panel_model_resets_arena_outputs(monkeypatch) -> None:
 		app_module,
 		"_reasoning_control_updates",
 		lambda model_id: (
-			"reasoning-enabled",
-			"reasoning-budget",
 			"reasoning-effort",
 			"reasoning-cost-hint",
 		),
 	)
 
 	assert app_module.update_panel_model("beta/two") == (
-		"reasoning-enabled",
-		"reasoning-budget",
 		"reasoning-effort",
 		"reasoning-cost-hint",
 		*reset_outputs,
@@ -140,10 +132,8 @@ def test_reasoning_control_updates_hide_controls_for_unsupported_models(monkeypa
 	monkeypatch.setattr(app_module, "MODEL_LOOKUP", {"alpha/one": {}})
 	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
 
-	enable, budget, effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
+	effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
 
-	assert enable["visible"] is False
-	assert budget["visible"] is False
 	assert effort["visible"] is False
 	assert cost_hint["visible"] is False
 
@@ -163,12 +153,8 @@ def test_reasoning_control_updates_show_effort_for_generic_reasoning(monkeypatch
 	)
 	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
 
-	enable, budget, effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
+	effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
 
-	assert enable["visible"] is False
-	assert budget["visible"] is False
-	assert budget["value"] == 2048
-	assert budget["maximum"] == 7372
 	assert effort["visible"] is True
 	assert effort["choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
 	assert effort["value"] == "medium"
@@ -191,10 +177,8 @@ def test_reasoning_control_updates_show_effort_dropdown_only(monkeypatch) -> Non
 	)
 	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
 
-	enable, budget, effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
+	effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
 
-	assert enable["visible"] is False
-	assert budget["visible"] is False
 	assert effort["visible"] is True
 	assert effort["choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
 	assert effort["value"] == "high"
@@ -202,7 +186,7 @@ def test_reasoning_control_updates_show_effort_dropdown_only(monkeypatch) -> Non
 	assert cost_hint["value"] == "; reasoning $3/M."
 
 
-def test_update_reasoning_budget_visibility_only_reveals_budget_models(monkeypatch) -> None:
+def test_reasoning_control_updates_hide_budget_only_models(monkeypatch) -> None:
 	monkeypatch.setattr(
 		app_module,
 		"MODEL_LOOKUP",
@@ -216,9 +200,10 @@ def test_update_reasoning_budget_visibility_only_reveals_budget_models(monkeypat
 		},
 	)
 
-	assert app_module.update_reasoning_budget_visibility(True, "budget/model")["visible"] is True
-	assert app_module.update_reasoning_budget_visibility(False, "budget/model")["visible"] is False
-	assert app_module.update_reasoning_budget_visibility(True, "effort/model")["visible"] is False
+	effort, cost_hint = app_module._reasoning_control_updates("budget/model")
+
+	assert effort["visible"] is False
+	assert cost_hint["visible"] is False
 
 
 def test_clear_histories_clears_user_input_and_resets_outputs(monkeypatch) -> None:
