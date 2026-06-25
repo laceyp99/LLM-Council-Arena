@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from arena import app as app_module
@@ -16,6 +17,29 @@ def test_write_and_read_json_file_roundtrip(tmp_path: Path) -> None:
 
 	assert app_module._read_json_file(json_file, dict, {}) == payload
 	assert json.loads(json_file.read_text(encoding="utf-8")) == payload
+
+
+def test_write_json_file_keeps_existing_file_valid_when_replace_fails(
+	monkeypatch,
+	tmp_path: Path,
+) -> None:
+	json_file = tmp_path / "round.json"
+	original_payload = {"round_id": "existing", "count": 1}
+	app_module._write_json_file(json_file, original_payload)
+
+	def fail_replace(source, destination) -> None:
+		raise OSError("replace failed")
+
+	monkeypatch.setattr(app_module.os, "replace", fail_replace)
+
+	try:
+		app_module._write_json_file(json_file, {"round_id": "new", "count": 2})
+		assert False, "Expected OSError for failed atomic replacement"
+	except OSError as exc:
+		assert "replace failed" in str(exc)
+
+	assert app_module._read_json_file(json_file, dict, {}) == original_payload
+	assert list(tmp_path.glob(".round.json.*.tmp")) == []
 
 
 def test_read_json_file_raises_for_invalid_json_and_wrong_structure(tmp_path: Path) -> None:
@@ -63,6 +87,23 @@ def test_ensure_log_store_and_append_vote_record_use_configured_paths(
 	assert session_logs_dir.exists()
 	assert app_module._read_json_file(meta_log_file, dict, {})["schema_version"] == 1
 	assert app_module._read_json_file(votes_file, list, []) == [{"round_id": "round-1"}]
+
+
+def test_append_vote_record_preserves_concurrent_records(monkeypatch, tmp_path: Path) -> None:
+	votes_file = tmp_path / "votes.json"
+	monkeypatch.setattr(app_module, "VOTES_FILE", votes_file)
+
+	def append_record(index: int) -> None:
+		app_module._append_vote_record({"round_id": f"round-{index}"})
+
+	with ThreadPoolExecutor(max_workers=8) as executor:
+		list(executor.map(append_record, range(40)))
+
+	votes = app_module._read_json_file(votes_file, list, [])
+	round_ids = {record["round_id"] for record in votes}
+
+	assert len(votes) == 40
+	assert round_ids == {f"round-{index}" for index in range(40)}
 
 
 def test_build_vote_record_uses_round_state_mapping_and_rankings() -> None:
