@@ -45,6 +45,16 @@ estimate because actual reasoning token use and provider routing can vary.
 
 ## Installation
 
+This project supports Python 3.13 or newer. The repository includes a `.python-version`
+file for local version managers, and the package fails fast when imported with an
+older interpreter.
+
+Confirm Python 3.13 is available before creating the virtual environment:
+
+```powershell
+py -3.13 --version
+```
+
 1. Create and activate a virtual environment.
 2. Install the dependencies:
 
