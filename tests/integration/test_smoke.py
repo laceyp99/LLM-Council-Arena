@@ -50,6 +50,8 @@ def _startup_selector_config(
 		)
 
 		app_module = importlib.import_module("arena.app")
+		app_module.initialize_model_catalog()
+		app_module.create_demo()
 		print(
 			json.dumps(
 				{
@@ -99,6 +101,9 @@ def test_main_entrypoint_launches_demo(monkeypatch) -> None:
 	def fake_bootstrap_persistence() -> None:
 		launch_calls.append("bootstrap")
 
+	def fake_initialize_model_catalog() -> None:
+		launch_calls.append("initialize")
+
 	class FakeQueuedDemo:
 		def launch(self) -> None:
 			launch_calls.append("launch")
@@ -109,11 +114,12 @@ def test_main_entrypoint_launches_demo(monkeypatch) -> None:
 			return FakeQueuedDemo()
 
 	monkeypatch.setattr(main_module, "_bootstrap_persistence", fake_bootstrap_persistence)
-	monkeypatch.setattr(main_module, "demo", FakeDemo())
+	monkeypatch.setattr(main_module, "initialize_model_catalog", fake_initialize_model_catalog)
+	monkeypatch.setattr(main_module, "create_demo", lambda: FakeDemo())
 
 	main_module.main()
 
-	assert launch_calls == ["bootstrap", "queue", "launch"]
+	assert launch_calls == ["bootstrap", "initialize", "queue", "launch"]
 
 
 def test_startup_keeps_model_selectors_active_when_live_catalog_loads() -> None:
