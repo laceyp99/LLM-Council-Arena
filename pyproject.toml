@@ -21,7 +21,7 @@ llm-council-arena = "arena.__main__:main"
 dev = [
     "pytest==8.3.5",
     "ruff==0.11.5",
-    "pre-commit==3.7.1",
+    "pre-commit==4.5.1",
 ]
 
 [tool.setuptools.packages.find]

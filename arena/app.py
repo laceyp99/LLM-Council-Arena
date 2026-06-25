@@ -803,6 +803,23 @@ def _finalize_generation_state(
 	round_state["vote_stage"] = "pick_first" if completed_slots else "unavailable"
 
 
+def _finalize_blocked_generation_state(
+	round_state: dict[str, Any],
+	histories: list[list[Any]],
+	assistant_message_indices: list[int | None],
+	reasoning_message_indices: list[int | None],
+	blocked_slots: set[int],
+) -> None:
+	_finalize_generation_state(
+		round_state,
+		histories,
+		assistant_message_indices,
+		reasoning_message_indices,
+		completed_slots=set(),
+		errored_slots=blocked_slots,
+	)
+
+
 async def stream_all_models(
 	user_text: str,
 	system_prompt: str,
@@ -870,6 +887,11 @@ async def stream_all_models(
 
 	missing_selection = [index for index, model_id in enumerate(model_ids) if not model_id]
 	if missing_selection:
+		selected_but_unattempted = [
+			index
+			for index, model_id in enumerate(model_ids)
+			if model_id and index not in missing_selection
+		]
 		for index in missing_selection:
 			assistant_message_indices[index] = _upsert_assistant_message(
 				history=histories[index],
@@ -878,8 +900,22 @@ async def stream_all_models(
 			)
 			round_state["slot_logs"][index]["status"] = "blocked"
 			round_state["slot_logs"][index]["error"] = "No model selected for this panel."
-		_finalize_round_state_logs(
-			round_state, histories, assistant_message_indices, reasoning_message_indices
+		for index in selected_but_unattempted:
+			assistant_message_indices[index] = _upsert_assistant_message(
+				history=histories[index],
+				message_index=assistant_message_indices[index],
+				content="Generation blocked because each panel needs a selected model.",
+			)
+			round_state["slot_logs"][index]["status"] = "blocked"
+			round_state["slot_logs"][index]["error"] = (
+				"Generation blocked because each panel needs a selected model."
+			)
+		_finalize_blocked_generation_state(
+			round_state,
+			histories,
+			assistant_message_indices,
+			reasoning_message_indices,
+			set(range(PANEL_COUNT)),
 		)
 		yield _streaming_outputs(
 			chatbot_updates=_targeted_chatbot_value_updates(
@@ -899,8 +935,12 @@ async def stream_all_models(
 			)
 			round_state["slot_logs"][index]["status"] = "blocked"
 			round_state["slot_logs"][index]["error"] = "Missing OPENROUTER_API_KEY in environment."
-		_finalize_round_state_logs(
-			round_state, histories, assistant_message_indices, reasoning_message_indices
+		_finalize_blocked_generation_state(
+			round_state,
+			histories,
+			assistant_message_indices,
+			reasoning_message_indices,
+			set(range(PANEL_COUNT)),
 		)
 		yield _streaming_outputs(
 			chatbot_updates=_targeted_chatbot_value_updates(
