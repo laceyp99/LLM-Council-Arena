@@ -369,11 +369,24 @@ async def test_stream_all_models_blocks_when_panel_has_no_model_selected(monkeyp
 	assert len(outputs) == 2
 	assert final_round_state["generation_completed_at"] is not None
 	assert final_round_state["completed_slots"] == []
-	assert final_round_state["errored_slots"] == [1]
+	assert final_round_state["errored_slots"] == [0, 1, 2]
 	assert final_round_state["ready_for_vote"] is False
 	assert final_round_state["vote_stage"] == "unavailable"
+	assert [slot_log["status"] for slot_log in final_round_state["slot_logs"]] == [
+		"blocked",
+		"blocked",
+		"blocked",
+	]
+	assert (
+		final_round_state["slot_logs"][0]["error"]
+		== "Generation blocked because each panel needs a selected model."
+	)
 	assert final_round_state["slot_logs"][1]["status"] == "blocked"
 	assert final_round_state["slot_logs"][1]["error"] == "No model selected for this panel."
+	assert (
+		final_round_state["slot_logs"][2]["error"]
+		== "Generation blocked because each panel needs a selected model."
+	)
 
 
 @pytest.mark.anyio

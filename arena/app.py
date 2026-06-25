@@ -849,6 +849,11 @@ async def stream_all_models(
 
 	missing_selection = [index for index, model_id in enumerate(model_ids) if not model_id]
 	if missing_selection:
+		selected_but_unattempted = [
+			index
+			for index, model_id in enumerate(model_ids)
+			if model_id and index not in missing_selection
+		]
 		for index in missing_selection:
 			assistant_message_indices[index] = _upsert_assistant_message(
 				history=histories[index],
@@ -857,12 +862,22 @@ async def stream_all_models(
 			)
 			round_state["slot_logs"][index]["status"] = "blocked"
 			round_state["slot_logs"][index]["error"] = "No model selected for this panel."
+		for index in selected_but_unattempted:
+			assistant_message_indices[index] = _upsert_assistant_message(
+				history=histories[index],
+				message_index=assistant_message_indices[index],
+				content="Generation blocked because each panel needs a selected model.",
+			)
+			round_state["slot_logs"][index]["status"] = "blocked"
+			round_state["slot_logs"][index]["error"] = (
+				"Generation blocked because each panel needs a selected model."
+			)
 		_finalize_blocked_generation_state(
 			round_state,
 			histories,
 			assistant_message_indices,
 			reasoning_message_indices,
-			set(missing_selection),
+			set(range(PANEL_COUNT)),
 		)
 		yield _streaming_outputs(
 			chatbot_updates=_targeted_chatbot_value_updates(
