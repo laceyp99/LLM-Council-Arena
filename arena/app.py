@@ -12,6 +12,7 @@ from arena.core.api import OpenRouterAPI
 from arena.core.models import (
 	_build_provider_index,
 	_default_model_ids,
+	_fallback_model_catalog,
 	_load_model_catalog,
 )
 from arena.core.models import (
@@ -79,10 +80,11 @@ from arena.ui.display import (
 	_upsert_reasoning_message,
 )
 
-MODEL_CATALOG, MODEL_CATALOG_STATUS, OPENROUTER_API_KEY = _load_model_catalog(
-	site_url=SITE_URL,
-	site_name=SITE_NAME,
+MODEL_CATALOG = _fallback_model_catalog()
+MODEL_CATALOG_STATUS = (
+	"Warning: model catalog has not been initialized. Using the fallback model list."
 )
+OPENROUTER_API_KEY: str | None = None
 MODEL_LOOKUP = {entry["model_id"]: entry for entry in MODEL_CATALOG}
 PROVIDER_CHOICES, PROVIDER_MODELS = _build_provider_index(MODEL_CATALOG)
 DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
@@ -92,6 +94,42 @@ DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
 	panel_count=PANEL_COUNT,
 )
 GENERATION_INTERRUPTED_MESSAGE = "Generation stopped before this round could finish."
+demo: gr.Blocks | None = None
+
+
+def _set_model_catalog_state(
+	model_catalog: list[dict[str, Any]],
+	model_catalog_status: str,
+	openrouter_api_key: str | None,
+) -> None:
+	global DEFAULT_PANEL_MODEL_IDS
+	global MODEL_CATALOG
+	global MODEL_CATALOG_STATUS
+	global MODEL_LOOKUP
+	global OPENROUTER_API_KEY
+	global PROVIDER_CHOICES
+	global PROVIDER_MODELS
+
+	MODEL_CATALOG = model_catalog
+	MODEL_CATALOG_STATUS = model_catalog_status
+	OPENROUTER_API_KEY = openrouter_api_key
+	MODEL_LOOKUP = {entry["model_id"]: entry for entry in MODEL_CATALOG}
+	PROVIDER_CHOICES, PROVIDER_MODELS = _build_provider_index(MODEL_CATALOG)
+	DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
+		model_catalog=MODEL_CATALOG,
+		provider_models=PROVIDER_MODELS,
+		default_model_ids=DEFAULT_MODEL_IDS,
+		panel_count=PANEL_COUNT,
+	)
+
+
+def initialize_model_catalog() -> None:
+	_set_model_catalog_state(
+		*_load_model_catalog(
+			site_url=SITE_URL,
+			site_name=SITE_NAME,
+		)
+	)
 
 
 def _timestamp_slug(iso_timestamp: str | None) -> str:
@@ -971,340 +1009,352 @@ def clear_histories(panel_1_model: str, panel_2_model: str, panel_3_model: str):
 	return "", *_reset_arena_outputs()
 
 
-default_panel_providers = [_provider_for_model(model_id) for model_id in DEFAULT_PANEL_MODEL_IDS]
-initial_leaderboard_summary, initial_leaderboard_rows = _leaderboard_view_data()
+def create_demo() -> gr.Blocks:
+	global demo
+	global openrouter_status_banner
+	global panel_1_model
+	global panel_1_provider
+	global send_btn
 
+	default_panel_providers = [
+		_provider_for_model(model_id) for model_id in DEFAULT_PANEL_MODEL_IDS
+	]
+	initial_leaderboard_summary, initial_leaderboard_rows = _leaderboard_view_data()
 
-with gr.Blocks(title="LLM Council Arena") as demo:
-	gr.Markdown("# LLM Council Arena")
+	with gr.Blocks(title="LLM Council Arena") as built_demo:
+		gr.Markdown("# LLM Council Arena")
 
-	with gr.Tabs():
-		with gr.Tab("Arena"):
-			openrouter_status_banner = _openrouter_status_banner()
+		with gr.Tabs():
+			with gr.Tab("Arena"):
+				openrouter_status_banner = _openrouter_status_banner()
 
-			with gr.Row():
-				with gr.Column(scale=1):
-					panel_1_provider = gr.Dropdown(
-						label="Provider",
-						choices=PROVIDER_CHOICES,
-						value=default_panel_providers[0],
-						interactive=_selectors_interactive(),
+				with gr.Row():
+					with gr.Column(scale=1):
+						panel_1_provider = gr.Dropdown(
+							label="Provider",
+							choices=PROVIDER_CHOICES,
+							value=default_panel_providers[0],
+							interactive=_selectors_interactive(),
+						)
+						panel_1_model = gr.Dropdown(
+							label="Model",
+							choices=_model_choices_for_provider(default_panel_providers[0]),
+							value=DEFAULT_PANEL_MODEL_IDS[0],
+							interactive=_selectors_interactive(),
+						)
+						(
+							panel_1_reasoning_effort,
+							panel_1_reasoning_cost_hint,
+						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[0])
+
+					with gr.Column(scale=1):
+						panel_2_provider = gr.Dropdown(
+							label="Provider",
+							choices=PROVIDER_CHOICES,
+							value=default_panel_providers[1],
+							interactive=_selectors_interactive(),
+						)
+						panel_2_model = gr.Dropdown(
+							label="Model",
+							choices=_model_choices_for_provider(default_panel_providers[1]),
+							value=DEFAULT_PANEL_MODEL_IDS[1],
+							interactive=_selectors_interactive(),
+						)
+						(
+							panel_2_reasoning_effort,
+							panel_2_reasoning_cost_hint,
+						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[1])
+
+					with gr.Column(scale=1):
+						panel_3_provider = gr.Dropdown(
+							label="Provider",
+							choices=PROVIDER_CHOICES,
+							value=default_panel_providers[2],
+							interactive=_selectors_interactive(),
+						)
+						panel_3_model = gr.Dropdown(
+							label="Model",
+							choices=_model_choices_for_provider(default_panel_providers[2]),
+							value=DEFAULT_PANEL_MODEL_IDS[2],
+							interactive=_selectors_interactive(),
+						)
+						(
+							panel_3_reasoning_effort,
+							panel_3_reasoning_cost_hint,
+						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[2])
+
+				with gr.Accordion("System Prompt", open=False):
+					system_prompt = gr.Textbox(
+						label="Instructions to all models",
+						value=DEFAULT_SYSTEM_PROMPT,
+						lines=4,
 					)
-					panel_1_model = gr.Dropdown(
-						label="Model",
-						choices=_model_choices_for_provider(default_panel_providers[0]),
-						value=DEFAULT_PANEL_MODEL_IDS[0],
-						interactive=_selectors_interactive(),
-					)
-					(
-						panel_1_reasoning_effort,
-						panel_1_reasoning_cost_hint,
-					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[0])
 
-				with gr.Column(scale=1):
-					panel_2_provider = gr.Dropdown(
-						label="Provider",
-						choices=PROVIDER_CHOICES,
-						value=default_panel_providers[1],
-						interactive=_selectors_interactive(),
-					)
-					panel_2_model = gr.Dropdown(
-						label="Model",
-						choices=_model_choices_for_provider(default_panel_providers[1]),
-						value=DEFAULT_PANEL_MODEL_IDS[1],
-						interactive=_selectors_interactive(),
-					)
-					(
-						panel_2_reasoning_effort,
-						panel_2_reasoning_cost_hint,
-					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[1])
+				user_input = gr.Textbox(
+					label="Prompt",
+					placeholder="Type your prompt and click Send...",
+					lines=3,
+				)
+				send_btn = gr.Button("Send", interactive=_selectors_interactive())
+				round_state = gr.State(_empty_round_state())
 
-				with gr.Column(scale=1):
-					panel_3_provider = gr.Dropdown(
-						label="Provider",
-						choices=PROVIDER_CHOICES,
-						value=default_panel_providers[2],
-						interactive=_selectors_interactive(),
-					)
-					panel_3_model = gr.Dropdown(
-						label="Model",
-						choices=_model_choices_for_provider(default_panel_providers[2]),
-						value=DEFAULT_PANEL_MODEL_IDS[2],
-						interactive=_selectors_interactive(),
-					)
-					(
-						panel_3_reasoning_effort,
-						panel_3_reasoning_cost_hint,
-					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[2])
+				with gr.Row():
+					with gr.Column(scale=1):
+						panel_1_chat = _chatbot_config(label=_panel_label(0), height=520)
+					with gr.Column(scale=1):
+						panel_2_chat = _chatbot_config(label=_panel_label(1), height=520)
+					with gr.Column(scale=1):
+						panel_3_chat = _chatbot_config(label=_panel_label(2), height=520)
 
-			with gr.Accordion("System Prompt", open=False):
-				system_prompt = gr.Textbox(
-					label="Instructions to all models",
-					value=DEFAULT_SYSTEM_PROMPT,
-					lines=4,
+				with gr.Group():
+					gr.Markdown("## Vote on the Anonymous Responses")
+					with gr.Row():
+						vote_response_a_btn = gr.Button(_panel_label(0), interactive=False)
+						vote_response_b_btn = gr.Button(_panel_label(1), interactive=False)
+						vote_response_c_btn = gr.Button(_panel_label(2), interactive=False)
+					with gr.Row():
+						vote_reset_btn = gr.Button("Reset Vote", interactive=False)
+						vote_submit_btn = gr.Button("Submit Vote", interactive=False)
+					vote_status_banner = gr.HTML(value="", visible=False)
+
+			with gr.Tab("Leaderboard"):
+				leaderboard_summary_md = gr.Markdown(initial_leaderboard_summary)
+				leaderboard_table = gr.Dataframe(
+					headers=["Rank", "Model", "Provider", "Wins", "Appearances", "Win Rate"],
+					value=initial_leaderboard_rows,
+					interactive=False,
+					wrap=True,
 				)
 
-			user_input = gr.Textbox(
-				label="Prompt",
-				placeholder="Type your prompt and click Send...",
-				lines=3,
-			)
-			send_btn = gr.Button("Send", interactive=_selectors_interactive())
-			round_state = gr.State(_empty_round_state())
-
-			with gr.Row():
-				with gr.Column(scale=1):
-					panel_1_chat = _chatbot_config(label=_panel_label(0), height=520)
-				with gr.Column(scale=1):
-					panel_2_chat = _chatbot_config(label=_panel_label(1), height=520)
-				with gr.Column(scale=1):
-					panel_3_chat = _chatbot_config(label=_panel_label(2), height=520)
-
-			with gr.Group():
-				gr.Markdown("## Vote on the Anonymous Responses")
-				with gr.Row():
-					vote_response_a_btn = gr.Button(_panel_label(0), interactive=False)
-					vote_response_b_btn = gr.Button(_panel_label(1), interactive=False)
-					vote_response_c_btn = gr.Button(_panel_label(2), interactive=False)
-				with gr.Row():
-					vote_reset_btn = gr.Button("Reset Vote", interactive=False)
-					vote_submit_btn = gr.Button("Submit Vote", interactive=False)
-				vote_status_banner = gr.HTML(value="", visible=False)
-
-		with gr.Tab("Leaderboard"):
-			leaderboard_summary_md = gr.Markdown(initial_leaderboard_summary)
-			leaderboard_table = gr.Dataframe(
-				headers=["Rank", "Model", "Provider", "Wins", "Appearances", "Win Rate"],
-				value=initial_leaderboard_rows,
-				interactive=False,
-				wrap=True,
-			)
-
-	submit_outputs = [
-		user_input,
-		panel_1_chat,
-		panel_2_chat,
-		panel_3_chat,
-		round_state,
-		vote_response_a_btn,
-		vote_response_b_btn,
-		vote_response_c_btn,
-		vote_reset_btn,
-		vote_submit_btn,
-		vote_status_banner,
-	]
-	submit_inputs = [
-		user_input,
-		system_prompt,
-		panel_1_model,
-		panel_2_model,
-		panel_3_model,
-		panel_1_reasoning_effort,
-		panel_2_reasoning_effort,
-		panel_3_reasoning_effort,
-	]
-
-	panel_1_provider.change(
-		fn=update_panel_provider,
-		inputs=[panel_1_provider],
-		outputs=[
+		submit_outputs = [
+			user_input,
+			panel_1_chat,
+			panel_2_chat,
+			panel_3_chat,
+			round_state,
+			vote_response_a_btn,
+			vote_response_b_btn,
+			vote_response_c_btn,
+			vote_reset_btn,
+			vote_submit_btn,
+			vote_status_banner,
+		]
+		submit_inputs = [
+			user_input,
+			system_prompt,
 			panel_1_model,
-			panel_1_reasoning_effort,
-			panel_1_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	panel_2_provider.change(
-		fn=update_panel_provider,
-		inputs=[panel_2_provider],
-		outputs=[
 			panel_2_model,
-			panel_2_reasoning_effort,
-			panel_2_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	panel_3_provider.change(
-		fn=update_panel_provider,
-		inputs=[panel_3_provider],
-		outputs=[
 			panel_3_model,
-			panel_3_reasoning_effort,
-			panel_3_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-
-	panel_1_model.change(
-		fn=update_panel_model,
-		inputs=[panel_1_model],
-		outputs=[
 			panel_1_reasoning_effort,
-			panel_1_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	panel_2_model.change(
-		fn=update_panel_model,
-		inputs=[panel_2_model],
-		outputs=[
 			panel_2_reasoning_effort,
-			panel_2_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	panel_3_model.change(
-		fn=update_panel_model,
-		inputs=[panel_3_model],
-		outputs=[
 			panel_3_reasoning_effort,
-			panel_3_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	user_input.submit(
-		fn=stream_all_models,
-		inputs=submit_inputs,
-		outputs=submit_outputs,
-		show_progress="hidden",
-	)
-	send_btn.click(
-		fn=stream_all_models,
-		inputs=submit_inputs,
-		outputs=submit_outputs,
-		show_progress="hidden",
-	)
-	vote_response_a_btn.click(
-		fn=vote_response_a,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	vote_response_b_btn.click(
-		fn=vote_response_b,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	vote_response_c_btn.click(
-		fn=vote_response_c,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	vote_reset_btn.click(
-		fn=reset_vote,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	vote_submit_btn.click(
-		fn=submit_vote,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-			leaderboard_summary_md,
-			leaderboard_table,
-		],
-	)
-	demo.load(
-		fn=_leaderboard_view_data,
-		inputs=None,
-		outputs=[leaderboard_summary_md, leaderboard_table],
-	)
+		]
+
+		panel_1_provider.change(
+			fn=update_panel_provider,
+			inputs=[panel_1_provider],
+			outputs=[
+				panel_1_model,
+				panel_1_reasoning_effort,
+				panel_1_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		panel_2_provider.change(
+			fn=update_panel_provider,
+			inputs=[panel_2_provider],
+			outputs=[
+				panel_2_model,
+				panel_2_reasoning_effort,
+				panel_2_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		panel_3_provider.change(
+			fn=update_panel_provider,
+			inputs=[panel_3_provider],
+			outputs=[
+				panel_3_model,
+				panel_3_reasoning_effort,
+				panel_3_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+
+		panel_1_model.change(
+			fn=update_panel_model,
+			inputs=[panel_1_model],
+			outputs=[
+				panel_1_reasoning_effort,
+				panel_1_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		panel_2_model.change(
+			fn=update_panel_model,
+			inputs=[panel_2_model],
+			outputs=[
+				panel_2_reasoning_effort,
+				panel_2_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		panel_3_model.change(
+			fn=update_panel_model,
+			inputs=[panel_3_model],
+			outputs=[
+				panel_3_reasoning_effort,
+				panel_3_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		user_input.submit(
+			fn=stream_all_models,
+			inputs=submit_inputs,
+			outputs=submit_outputs,
+			show_progress="hidden",
+		)
+		send_btn.click(
+			fn=stream_all_models,
+			inputs=submit_inputs,
+			outputs=submit_outputs,
+			show_progress="hidden",
+		)
+		vote_response_a_btn.click(
+			fn=vote_response_a,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		vote_response_b_btn.click(
+			fn=vote_response_b,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		vote_response_c_btn.click(
+			fn=vote_response_c,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		vote_reset_btn.click(
+			fn=reset_vote,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		vote_submit_btn.click(
+			fn=submit_vote,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+				leaderboard_summary_md,
+				leaderboard_table,
+			],
+		)
+		built_demo.load(
+			fn=_leaderboard_view_data,
+			inputs=None,
+			outputs=[leaderboard_summary_md, leaderboard_table],
+		)
+
+	demo = built_demo
+	return built_demo
 
 
 if __name__ == "__main__":
 	_bootstrap_persistence()
-	demo.queue().launch()
+	initialize_model_catalog()
+	create_demo().queue().launch()
