@@ -1,4 +1,5 @@
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -39,6 +40,27 @@ def test_write_json_file_keeps_existing_file_valid_when_replace_fails(
 		assert "replace failed" in str(exc)
 
 	assert app_module._read_json_file(json_file, dict, {}) == original_payload
+	assert list(tmp_path.glob(".round.json.*.tmp")) == []
+
+
+def test_write_json_file_keeps_replaced_file_when_directory_sync_fails(
+	caplog,
+	monkeypatch,
+	tmp_path: Path,
+) -> None:
+	json_file = tmp_path / "round.json"
+	new_payload = {"round_id": "new", "count": 2}
+
+	def fail_parent_sync(path) -> None:
+		raise OSError("directory sync failed")
+
+	monkeypatch.setattr(app_module, "_fsync_parent_directory", fail_parent_sync)
+
+	with caplog.at_level(logging.WARNING, logger=app_module.LOGGER.name):
+		app_module._write_json_file(json_file, new_payload)
+
+	assert app_module._read_json_file(json_file, dict, {}) == new_payload
+	assert "was replaced, but syncing the parent directory failed" in caplog.text
 	assert list(tmp_path.glob(".round.json.*.tmp")) == []
 
 

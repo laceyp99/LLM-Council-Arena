@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -99,6 +100,7 @@ DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
 )
 GENERATION_INTERRUPTED_MESSAGE = "Generation stopped before this round could finish."
 demo: gr.Blocks | None = None
+LOGGER = logging.getLogger(__name__)
 
 
 def _set_model_catalog_state(
@@ -177,7 +179,14 @@ def _write_json_file(path: Path, payload: Any) -> None:
 			os.fsync(temporary_file.fileno())
 
 		os.replace(temporary_path, path)
-		_fsync_parent_directory(path)
+		try:
+			_fsync_parent_directory(path)
+		except OSError as exc:
+			LOGGER.warning(
+				"JSON file %s was replaced, but syncing the parent directory failed: %s",
+				path,
+				exc,
+			)
 		temporary_path = None
 	finally:
 		if temporary_path is not None:
