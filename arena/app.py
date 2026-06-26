@@ -415,7 +415,9 @@ def _update_meta_log(round_state: dict[str, Any], session_dir: str) -> None:
 			)
 
 			model_entry["model_label"] = slot_log.get("model_label") or model_entry["model_label"]
-			model_entry["provider_key"] = slot_log.get("provider_key") or model_entry["provider_key"]
+			model_entry["provider_key"] = (
+				slot_log.get("provider_key") or model_entry["provider_key"]
+			)
 			model_entry["appearances"] += 1
 			if slot_log.get("error"):
 				model_entry["error_count"] += 1
