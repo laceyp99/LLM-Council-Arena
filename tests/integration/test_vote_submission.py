@@ -105,7 +105,6 @@ def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
 	written_paths: list[object] = []
-	append_calls: list[dict[str, object]] = []
 	original_write_json_file = app_module._write_json_file
 
 	def tracking_write_json_file(path, payload) -> None:
@@ -118,11 +117,6 @@ def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 		"_update_meta_log",
 		lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("meta store unavailable")),
 	)
-	monkeypatch.setattr(
-		app_module,
-		"_append_vote_record",
-		lambda record: append_calls.append(record),
-	)
 
 	outputs = app_module.submit_vote(round_state)
 	submitted_state = outputs[0]
@@ -134,6 +128,11 @@ def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 	session_dir = session_dirs.pop()
 
 	assert submitted_state["submitted"] is False
+	assert submitted_state["vote_stage"] == "ready_submit"
+	assert submitted_state["first_choice"] == "Response A"
+	assert submitted_state["second_choice"] == "Response B"
+	assert submitted_state["third_choice"] == "Response C"
+	assert submitted_state["session_dir"] is None
 	assert submitted_state["submission_status"] == "error"
 	assert "meta store unavailable" in submitted_state["submission_message"]
 	assert isinstance(status_update, gr.HTML)
@@ -141,8 +140,8 @@ def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 	assert "meta store unavailable" in status_update.value
 	assert "background: #fee2e2" in status_update.value
 	assert "color: #7f1d1d" in status_update.value
-	assert append_calls == []
 	assert not app_module.VOTES_FILE.exists()
+	assert app_module._read_json_file(app_module.META_LOG_FILE, dict, {})["total_rounds"] == 0
 	assert sorted(path.name for path in session_file_paths) == [
 		"generation.json",
 		"histories.json",
@@ -157,17 +156,28 @@ def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp
 	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
-	monkeypatch.setattr(
-		app_module,
-		"_append_vote_record",
-		lambda record: (_ for _ in ()).throw(OSError("disk full")),
-	)
+	original_append_vote_record = app_module._append_vote_record
+	append_attempts = 0
+
+	def fail_once_append_vote_record(record) -> None:
+		nonlocal append_attempts
+		append_attempts += 1
+		if append_attempts == 1:
+			raise OSError("disk full")
+		original_append_vote_record(record)
+
+	monkeypatch.setattr(app_module, "_append_vote_record", fail_once_append_vote_record)
 
 	outputs = app_module.submit_vote(round_state)
 	submitted_state = outputs[0]
 	status_update = outputs[9]
 
-	assert submitted_state["submitted"] is True
+	assert submitted_state["submitted"] is False
+	assert submitted_state["vote_stage"] == "ready_submit"
+	assert submitted_state["first_choice"] == "Response A"
+	assert submitted_state["second_choice"] == "Response B"
+	assert submitted_state["third_choice"] == "Response C"
+	assert submitted_state["session_dir"] is None
 	assert submitted_state["log_warning"] == "disk full"
 	assert submitted_state["submission_status"] == "error"
 	assert "disk full" in submitted_state["submission_message"]
@@ -176,31 +186,44 @@ def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp
 	assert "disk full" in status_update.value
 	assert "background: #fee2e2" in status_update.value
 	assert "color: #7f1d1d" in status_update.value
-	assert (tmp_path / str(submitted_state["session_dir"]) / "round.json").exists()
+	assert not app_module.VOTES_FILE.exists()
+	assert list(app_module.SESSION_LOGS_DIR.glob("*")) == []
+	assert app_module._read_json_file(app_module.META_LOG_FILE, dict, {})["total_rounds"] == 0
+
+	retry_outputs = app_module.submit_vote(submitted_state)
+	retry_state = retry_outputs[0]
+	votes = app_module._read_json_file(app_module.VOTES_FILE, list, [])
+	meta_log = app_module._read_json_file(app_module.META_LOG_FILE, dict, {})
+
+	assert retry_state["submitted"] is True
+	assert retry_state["submission_status"] == "success"
+	assert retry_state["session_dir"] is not None
+	assert votes[0]["round_id"] == retry_state["round_id"]
+	assert meta_log["total_rounds"] == 1
+	assert (tmp_path / str(retry_state["session_dir"]) / "round.json").exists()
 
 
-def test_submit_vote_returns_current_state_when_round_log_write_fails(
+def test_submit_vote_rolls_back_vote_record_when_round_log_write_fails(
 	monkeypatch, tmp_path
 ) -> None:
 	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
-	append_calls: list[dict[str, object]] = []
 	monkeypatch.setattr(
 		app_module,
-		"_write_round_logs",
-		lambda candidate_state: (_ for _ in ()).throw(PermissionError("log store unavailable")),
-	)
-	monkeypatch.setattr(
-		app_module,
-		"_append_vote_record",
-		lambda record: append_calls.append(record),
+		"_write_round_session_artifacts",
+		lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("log store unavailable")),
 	)
 
 	outputs = app_module.submit_vote(round_state)
 	status_update = outputs[9]
 
 	assert outputs[0]["submitted"] is False
+	assert outputs[0]["vote_stage"] == "ready_submit"
+	assert outputs[0]["first_choice"] == "Response A"
+	assert outputs[0]["second_choice"] == "Response B"
+	assert outputs[0]["third_choice"] == "Response C"
+	assert outputs[0]["session_dir"] is None
 	assert outputs[0]["submission_status"] == "error"
 	assert "log store unavailable" in outputs[0]["submission_message"]
 	assert isinstance(status_update, gr.HTML)
@@ -208,9 +231,9 @@ def test_submit_vote_returns_current_state_when_round_log_write_fails(
 	assert "log store unavailable" in status_update.value
 	assert "background: #fee2e2" in status_update.value
 	assert "color: #7f1d1d" in status_update.value
-	assert append_calls == []
 	assert not app_module.VOTES_FILE.exists()
-	assert not app_module.SESSION_LOGS_DIR.exists()
+	assert list(app_module.SESSION_LOGS_DIR.glob("*")) == []
+	assert app_module._read_json_file(app_module.META_LOG_FILE, dict, {})["total_rounds"] == 0
 
 
 def test_submit_vote_returns_existing_submission_without_rewriting(monkeypatch, tmp_path) -> None:

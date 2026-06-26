@@ -121,6 +121,21 @@ def _write_json_file(path: Path, payload: Any) -> None:
 	path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
 
 
+def _snapshot_file(path: Path) -> bytes | None:
+	if not path.exists():
+		return None
+	return path.read_bytes()
+
+
+def _restore_file(path: Path, snapshot: bytes | None) -> None:
+	if snapshot is None:
+		path.unlink(missing_ok=True)
+		return
+
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_bytes(snapshot)
+
+
 def _read_json_file(path: Path, expected_type: type[Any], missing_default: Any) -> Any:
 	if not path.exists():
 		return missing_default
@@ -162,6 +177,19 @@ def _append_vote_record(record: dict[str, Any]) -> None:
 
 	existing_records.append(record)
 	_write_json_file(VOTES_FILE, existing_records)
+
+
+def _remove_vote_record(round_id: str | None) -> None:
+	if not round_id or not VOTES_FILE.exists():
+		return
+
+	existing_records = _read_json_file(VOTES_FILE, list, [])
+	remaining_records = [
+		record
+		for record in existing_records
+		if not isinstance(record, dict) or record.get("round_id") != round_id
+	]
+	_write_json_file(VOTES_FILE, remaining_records)
 
 
 def _build_vote_record(
@@ -333,13 +361,17 @@ def _update_meta_log(round_state: dict[str, Any], session_dir: str) -> None:
 	_write_json_file(META_LOG_FILE, meta_log)
 
 
-def _write_round_logs(round_state: dict[str, Any]) -> str:
-	_ensure_log_store()
+def _round_session_log_path(round_state: dict[str, Any]) -> tuple[Path, str]:
 	round_id = str(round_state.get("round_id") or uuid4().hex)
 	session_dir_name = f"{_timestamp_slug(str(round_state.get('submitted_at') or ''))}_{round_id}"
 	session_dir = SESSION_LOGS_DIR / session_dir_name
-	session_dir.mkdir(parents=True, exist_ok=True)
 	session_dir_relative = session_dir.relative_to(APP_DIR).as_posix()
+	return session_dir, session_dir_relative
+
+
+def _write_round_session_artifacts(round_state: dict[str, Any], session_dir: Path) -> None:
+	round_id = str(round_state.get("round_id") or uuid4().hex)
+	session_dir.mkdir(parents=True, exist_ok=True)
 
 	try:
 		_write_json_file(session_dir / "round.json", _build_round_payload(round_state))
@@ -360,10 +392,31 @@ def _write_round_logs(round_state: dict[str, Any]) -> str:
 		)
 		_write_json_file(session_dir / "histories.json", _build_histories_payload(round_state))
 		_write_json_file(session_dir / "generation.json", _build_generation_payload(round_state))
-		_update_meta_log(round_state, session_dir_relative)
 	except Exception:
 		shutil.rmtree(session_dir, ignore_errors=True)
 		raise
+
+
+def _persist_vote_submission(round_state: dict[str, Any]) -> str:
+	_ensure_log_store()
+	session_dir, session_dir_relative = _round_session_log_path(round_state)
+	votes_snapshot = _snapshot_file(VOTES_FILE)
+	meta_snapshot = _snapshot_file(META_LOG_FILE)
+
+	try:
+		_append_vote_record(_build_vote_record(round_state, session_dir_relative))
+		_write_round_session_artifacts(round_state, session_dir)
+		_update_meta_log(round_state, session_dir_relative)
+	except Exception:
+		shutil.rmtree(session_dir, ignore_errors=True)
+		try:
+			_restore_file(META_LOG_FILE, meta_snapshot)
+			_restore_file(VOTES_FILE, votes_snapshot)
+		except Exception:
+			_remove_vote_record(round_state.get("round_id"))
+			raise
+		raise
+
 	return session_dir_relative
 
 
@@ -551,38 +604,29 @@ def submit_vote(round_state: dict[str, Any] | None):
 
 	candidate_state = {
 		**current_state,
-		"submitted": True,
 		"submitted_at": datetime.now(timezone.utc).isoformat(),
-		"vote_stage": "submitted",
 		"log_warning": None,
 		"submission_status": None,
 		"submission_message": None,
 	}
 
 	try:
-		session_dir = _write_round_logs(candidate_state)
+		session_dir = _persist_vote_submission(candidate_state)
 	except (RuntimeError, OSError) as exc:
 		failed_state = {
 			**current_state,
+			"submitted": False,
 			"log_warning": str(exc),
 			"submission_status": "error",
 			"submission_message": f"Vote could not be saved: {exc}",
 		}
 		return _submit_vote_outputs(failed_state)
 
+	candidate_state["submitted"] = True
+	candidate_state["vote_stage"] = "submitted"
 	candidate_state["session_dir"] = session_dir
-
-	try:
-		_append_vote_record(_build_vote_record(candidate_state, session_dir))
-	except (RuntimeError, OSError) as exc:
-		candidate_state["log_warning"] = str(exc)
-		candidate_state["submission_status"] = "error"
-		candidate_state["submission_message"] = (
-			f"Vote submitted, but saving the vote record failed: {exc}"
-		)
-	else:
-		candidate_state["submission_status"] = "success"
-		candidate_state["submission_message"] = "Vote submitted and saved successfully."
+	candidate_state["submission_status"] = "success"
+	candidate_state["submission_message"] = "Vote submitted and saved successfully."
 
 	return _submit_vote_outputs(candidate_state)
 
