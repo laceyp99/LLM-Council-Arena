@@ -117,7 +117,7 @@ This is intentional behavior in the current codebase.
 
 The app writes local JSON artifacts during use:
 
-- `votes.json`: append-only vote records
+- `votes.json`: accumulated vote history stored as a JSON array
 - `arena_logs/meta.json`: aggregate leaderboard and round summary data
 - `arena_logs/sessions/<timestamp>_<round_id>/round.json`: round metadata
 - `arena_logs/sessions/<timestamp>_<round_id>/generation.json`: generation output, errors, applied reasoning payloads, token/cost stats, and reasoning details

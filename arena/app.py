@@ -1,5 +1,10 @@
 import json
+import logging
+import os
 import shutil
+import tempfile
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -95,6 +100,7 @@ DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
 )
 GENERATION_INTERRUPTED_MESSAGE = "Generation stopped before this round could finish."
 demo: gr.Blocks | None = None
+LOGGER = logging.getLogger(__name__)
 
 
 def _set_model_catalog_state(
@@ -156,7 +162,89 @@ def _empty_meta_log() -> dict[str, Any]:
 
 def _write_json_file(path: Path, payload: Any) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
-	path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+	temporary_path: Path | None = None
+
+	try:
+		with tempfile.NamedTemporaryFile(
+			"w",
+			delete=False,
+			dir=path.parent,
+			encoding="utf-8",
+			prefix=f".{path.name}.",
+			suffix=".tmp",
+		) as temporary_file:
+			temporary_path = Path(temporary_file.name)
+			temporary_file.write(f"{json.dumps(payload, indent=2)}\n")
+			temporary_file.flush()
+			os.fsync(temporary_file.fileno())
+
+		os.replace(temporary_path, path)
+		try:
+			_fsync_parent_directory(path)
+		except OSError as exc:
+			LOGGER.warning(
+				"JSON file %s was replaced, but syncing the parent directory failed: %s",
+				path,
+				exc,
+			)
+		temporary_path = None
+	finally:
+		if temporary_path is not None:
+			temporary_path.unlink(missing_ok=True)
+
+
+def _fsync_parent_directory(path: Path) -> None:
+	if os.name != "posix":
+		return
+
+	directory_fd = os.open(path.parent, os.O_RDONLY)
+	try:
+		os.fsync(directory_fd)
+	finally:
+		os.close(directory_fd)
+
+
+@contextmanager
+def _json_file_lock(path: Path):
+	lock_path = path.with_name(f"{path.name}.lock")
+	lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+	with lock_path.open("a+b") as lock_file:
+		_lock_file(lock_file)
+		try:
+			yield
+		finally:
+			_unlock_file(lock_file)
+
+
+def _lock_file(lock_file: Any) -> None:
+	if os.name == "nt":
+		import msvcrt
+
+		lock_file.seek(0)
+		while True:
+			try:
+				msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+				return
+			except OSError:
+				time.sleep(0.01)
+
+	import fcntl
+
+	fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file(lock_file: Any) -> None:
+	if os.name == "nt":
+		import msvcrt
+
+		lock_file.seek(0)
+		msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+		return
+
+	import fcntl
+
+	fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _read_json_file(path: Path, expected_type: type[Any], missing_default: Any) -> Any:
@@ -175,13 +263,23 @@ def _read_json_file(path: Path, expected_type: type[Any], missing_default: Any) 
 
 
 def _ensure_votes_file() -> None:
+	with _json_file_lock(VOTES_FILE):
+		_ensure_votes_file_unlocked()
+
+
+def _ensure_votes_file_unlocked() -> None:
 	if VOTES_FILE.exists():
 		return
 
-	VOTES_FILE.write_text("[]\n", encoding="utf-8")
+	_write_json_file(VOTES_FILE, [])
 
 
 def _ensure_log_store() -> None:
+	with _json_file_lock(META_LOG_FILE):
+		_ensure_log_store_unlocked()
+
+
+def _ensure_log_store_unlocked() -> None:
 	LOGS_DIR.mkdir(parents=True, exist_ok=True)
 	SESSION_LOGS_DIR.mkdir(parents=True, exist_ok=True)
 	if not META_LOG_FILE.exists():
@@ -194,12 +292,13 @@ def _bootstrap_persistence() -> None:
 
 
 def _append_vote_record(record: dict[str, Any]) -> None:
-	_ensure_votes_file()
+	with _json_file_lock(VOTES_FILE):
+		_ensure_votes_file_unlocked()
 
-	existing_records = _read_json_file(VOTES_FILE, list, [])
+		existing_records = _read_json_file(VOTES_FILE, list, [])
 
-	existing_records.append(record)
-	_write_json_file(VOTES_FILE, existing_records)
+		existing_records.append(record)
+		_write_json_file(VOTES_FILE, existing_records)
 
 
 def _build_vote_record(
@@ -292,83 +391,86 @@ def _build_generation_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _update_meta_log(round_state: dict[str, Any], session_dir: str) -> None:
-	_ensure_log_store()
-	meta_log = _read_json_file(META_LOG_FILE, dict, _empty_meta_log())
-	model_totals = meta_log.setdefault("model_totals", {})
+	with _json_file_lock(META_LOG_FILE):
+		_ensure_log_store_unlocked()
+		meta_log = _read_json_file(META_LOG_FILE, dict, _empty_meta_log())
+		model_totals = meta_log.setdefault("model_totals", {})
 
-	for slot_log in _slot_logs_from_state(round_state):
-		model_id = str(slot_log.get("model_id") or "")
-		if not model_id:
-			continue
+		for slot_log in _slot_logs_from_state(round_state):
+			model_id = str(slot_log.get("model_id") or "")
+			if not model_id:
+				continue
 
-		model_entry = model_totals.setdefault(
-			model_id,
+			model_entry = model_totals.setdefault(
+				model_id,
+				{
+					"model_label": slot_log.get("model_label") or model_id,
+					"provider_key": slot_log.get("provider_key") or "",
+					"appearances": 0,
+					"rank_1_count": 0,
+					"rank_2_count": 0,
+					"rank_3_count": 0,
+					"wins": 0,
+					"error_count": 0,
+					"completion_count": 0,
+					"total_completion_tokens": 0,
+					"total_reasoning_tokens": 0,
+					"total_cost": 0.0,
+				},
+			)
+
+			model_entry["model_label"] = slot_log.get("model_label") or model_entry["model_label"]
+			model_entry["provider_key"] = (
+				slot_log.get("provider_key") or model_entry["provider_key"]
+			)
+			model_entry["appearances"] += 1
+			if slot_log.get("error"):
+				model_entry["error_count"] += 1
+			if slot_log.get("status") == "complete":
+				model_entry["completion_count"] += 1
+			completion_tokens = slot_log.get("completion_tokens")
+			if isinstance(completion_tokens, (int, float)):
+				model_entry["total_completion_tokens"] += int(completion_tokens)
+			reasoning_tokens = slot_log.get("reasoning_tokens")
+			if isinstance(reasoning_tokens, (int, float)):
+				model_entry["total_reasoning_tokens"] += int(reasoning_tokens)
+			cost = slot_log.get("cost")
+			if isinstance(cost, (int, float)):
+				model_entry["total_cost"] = round(model_entry["total_cost"] + float(cost), 8)
+
+		for ranking_entry in _ranking_details_from_state(round_state):
+			model_id = str(ranking_entry.get("model_id") or "")
+			if not model_id or model_id not in model_totals:
+				continue
+			rank = int(ranking_entry.get("rank") or 0)
+			if 1 <= rank <= PANEL_COUNT:
+				model_totals[model_id][f"rank_{rank}_count"] += 1
+				if rank == 1:
+					model_totals[model_id]["wins"] += 1
+
+		meta_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+		meta_log["total_rounds"] = int(meta_log.get("total_rounds") or 0) + 1
+		meta_log.setdefault("round_summaries", []).append(
 			{
-				"model_label": slot_log.get("model_label") or model_id,
-				"provider_key": slot_log.get("provider_key") or "",
-				"appearances": 0,
-				"rank_1_count": 0,
-				"rank_2_count": 0,
-				"rank_3_count": 0,
-				"wins": 0,
-				"error_count": 0,
-				"completion_count": 0,
-				"total_completion_tokens": 0,
-				"total_reasoning_tokens": 0,
-				"total_cost": 0.0,
+				"round_id": round_state.get("round_id"),
+				"created_at": round_state.get("created_at"),
+				"submitted_at": round_state.get("submitted_at"),
+				"prompt_sha256": round_state.get("prompt_sha256") or "",
+				"session_dir": session_dir,
+				"selected_models": [
+					{
+						"selection_slot": slot_log.get("selection_slot"),
+						"model_id": slot_log.get("model_id") or "",
+						"model_label": slot_log.get("model_label") or "",
+					}
+					for slot_log in _slot_logs_from_state(round_state)
+				],
+				"ranking": _ranking_details_from_state(round_state),
+				"errored_slots": round_state.get("errored_slots") or [],
 			},
 		)
 
-		model_entry["model_label"] = slot_log.get("model_label") or model_entry["model_label"]
-		model_entry["provider_key"] = slot_log.get("provider_key") or model_entry["provider_key"]
-		model_entry["appearances"] += 1
-		if slot_log.get("error"):
-			model_entry["error_count"] += 1
-		if slot_log.get("status") == "complete":
-			model_entry["completion_count"] += 1
-		completion_tokens = slot_log.get("completion_tokens")
-		if isinstance(completion_tokens, (int, float)):
-			model_entry["total_completion_tokens"] += int(completion_tokens)
-		reasoning_tokens = slot_log.get("reasoning_tokens")
-		if isinstance(reasoning_tokens, (int, float)):
-			model_entry["total_reasoning_tokens"] += int(reasoning_tokens)
-		cost = slot_log.get("cost")
-		if isinstance(cost, (int, float)):
-			model_entry["total_cost"] = round(model_entry["total_cost"] + float(cost), 8)
-
-	for ranking_entry in _ranking_details_from_state(round_state):
-		model_id = str(ranking_entry.get("model_id") or "")
-		if not model_id or model_id not in model_totals:
-			continue
-		rank = int(ranking_entry.get("rank") or 0)
-		if 1 <= rank <= PANEL_COUNT:
-			model_totals[model_id][f"rank_{rank}_count"] += 1
-			if rank == 1:
-				model_totals[model_id]["wins"] += 1
-
-	meta_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-	meta_log["total_rounds"] = int(meta_log.get("total_rounds") or 0) + 1
-	meta_log.setdefault("round_summaries", []).append(
-		{
-			"round_id": round_state.get("round_id"),
-			"created_at": round_state.get("created_at"),
-			"submitted_at": round_state.get("submitted_at"),
-			"prompt_sha256": round_state.get("prompt_sha256") or "",
-			"session_dir": session_dir,
-			"selected_models": [
-				{
-					"selection_slot": slot_log.get("selection_slot"),
-					"model_id": slot_log.get("model_id") or "",
-					"model_label": slot_log.get("model_label") or "",
-				}
-				for slot_log in _slot_logs_from_state(round_state)
-			],
-			"ranking": _ranking_details_from_state(round_state),
-			"errored_slots": round_state.get("errored_slots") or [],
-		},
-	)
-
-	_write_json_file(META_LOG_FILE, meta_log)
+		_write_json_file(META_LOG_FILE, meta_log)
 
 
 def _write_round_logs(round_state: dict[str, Any]) -> str:
