@@ -31,3 +31,4 @@ dist/
 arena_logs/
 votes.json
 *.json.lock
+*.json.*.tmp
