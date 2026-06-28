@@ -197,11 +197,7 @@ def _fsync_parent_directory(path: Path) -> None:
 	if os.name != "posix":
 		return
 
-	try:
-		directory_fd = os.open(path.parent, os.O_RDONLY)
-	except OSError:
-		return
-
+	directory_fd = os.open(path.parent, os.O_RDONLY)
 	try:
 		os.fsync(directory_fd)
 	finally:

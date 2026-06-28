@@ -64,6 +64,34 @@ def test_write_json_file_keeps_replaced_file_when_directory_sync_fails(
 	assert list(tmp_path.glob(".round.json.*.tmp")) == []
 
 
+def test_write_json_file_warns_when_directory_open_fails_after_replace(
+	caplog,
+	monkeypatch,
+	tmp_path: Path,
+) -> None:
+	json_file = tmp_path / "round.json"
+	new_payload = {"round_id": "new", "count": 2}
+	original_open = app_module.os.open
+
+	monkeypatch.setattr(app_module.os, "name", "posix")
+
+	def fail_open(path, flags, mode=0o777, *, dir_fd=None) -> int:
+		if str(path) == str(json_file.parent):
+			raise OSError("directory open failed")
+		if dir_fd is None:
+			return original_open(path, flags, mode)
+		return original_open(path, flags, mode, dir_fd=dir_fd)
+
+	monkeypatch.setattr(app_module.os, "open", fail_open)
+
+	with caplog.at_level(logging.WARNING, logger=app_module.LOGGER.name):
+		app_module._write_json_file(json_file, new_payload)
+
+	assert app_module._read_json_file(json_file, dict, {}) == new_payload
+	assert "directory open failed" in caplog.text
+	assert list(tmp_path.glob(".round.json.*.tmp")) == []
+
+
 def test_read_json_file_raises_for_invalid_json_and_wrong_structure(tmp_path: Path) -> None:
 	invalid_file = tmp_path / "invalid.json"
 	invalid_file.write_text("{not valid json}", encoding="utf-8")
