@@ -1,5 +1,10 @@
 import json
+import logging
+import os
 import shutil
+import tempfile
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -12,6 +17,7 @@ from arena.core.api import OpenRouterAPI
 from arena.core.models import (
 	_build_provider_index,
 	_default_model_ids,
+	_fallback_model_catalog,
 	_load_model_catalog,
 )
 from arena.core.models import (
@@ -79,10 +85,11 @@ from arena.ui.display import (
 	_upsert_reasoning_message,
 )
 
-MODEL_CATALOG, MODEL_CATALOG_STATUS, OPENROUTER_API_KEY = _load_model_catalog(
-	site_url=SITE_URL,
-	site_name=SITE_NAME,
+MODEL_CATALOG = _fallback_model_catalog()
+MODEL_CATALOG_STATUS = (
+	"Warning: model catalog has not been initialized. Using the fallback model list."
 )
+OPENROUTER_API_KEY: str | None = None
 MODEL_LOOKUP = {entry["model_id"]: entry for entry in MODEL_CATALOG}
 PROVIDER_CHOICES, PROVIDER_MODELS = _build_provider_index(MODEL_CATALOG)
 DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
@@ -92,6 +99,43 @@ DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
 	panel_count=PANEL_COUNT,
 )
 GENERATION_INTERRUPTED_MESSAGE = "Generation stopped before this round could finish."
+demo: gr.Blocks | None = None
+LOGGER = logging.getLogger(__name__)
+
+
+def _set_model_catalog_state(
+	model_catalog: list[dict[str, Any]],
+	model_catalog_status: str,
+	openrouter_api_key: str | None,
+) -> None:
+	global DEFAULT_PANEL_MODEL_IDS
+	global MODEL_CATALOG
+	global MODEL_CATALOG_STATUS
+	global MODEL_LOOKUP
+	global OPENROUTER_API_KEY
+	global PROVIDER_CHOICES
+	global PROVIDER_MODELS
+
+	MODEL_CATALOG = model_catalog
+	MODEL_CATALOG_STATUS = model_catalog_status
+	OPENROUTER_API_KEY = openrouter_api_key
+	MODEL_LOOKUP = {entry["model_id"]: entry for entry in MODEL_CATALOG}
+	PROVIDER_CHOICES, PROVIDER_MODELS = _build_provider_index(MODEL_CATALOG)
+	DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
+		model_catalog=MODEL_CATALOG,
+		provider_models=PROVIDER_MODELS,
+		default_model_ids=DEFAULT_MODEL_IDS,
+		panel_count=PANEL_COUNT,
+	)
+
+
+def initialize_model_catalog() -> None:
+	_set_model_catalog_state(
+		*_load_model_catalog(
+			site_url=SITE_URL,
+			site_name=SITE_NAME,
+		)
+	)
 
 
 def _timestamp_slug(iso_timestamp: str | None) -> str:
@@ -118,7 +162,89 @@ def _empty_meta_log() -> dict[str, Any]:
 
 def _write_json_file(path: Path, payload: Any) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
-	path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+	temporary_path: Path | None = None
+
+	try:
+		with tempfile.NamedTemporaryFile(
+			"w",
+			delete=False,
+			dir=path.parent,
+			encoding="utf-8",
+			prefix=f".{path.name}.",
+			suffix=".tmp",
+		) as temporary_file:
+			temporary_path = Path(temporary_file.name)
+			temporary_file.write(f"{json.dumps(payload, indent=2)}\n")
+			temporary_file.flush()
+			os.fsync(temporary_file.fileno())
+
+		os.replace(temporary_path, path)
+		try:
+			_fsync_parent_directory(path)
+		except OSError as exc:
+			LOGGER.warning(
+				"JSON file %s was replaced, but syncing the parent directory failed: %s",
+				path,
+				exc,
+			)
+		temporary_path = None
+	finally:
+		if temporary_path is not None:
+			temporary_path.unlink(missing_ok=True)
+
+
+def _fsync_parent_directory(path: Path) -> None:
+	if os.name != "posix":
+		return
+
+	directory_fd = os.open(path.parent, os.O_RDONLY)
+	try:
+		os.fsync(directory_fd)
+	finally:
+		os.close(directory_fd)
+
+
+@contextmanager
+def _json_file_lock(path: Path):
+	lock_path = path.with_name(f"{path.name}.lock")
+	lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+	with lock_path.open("a+b") as lock_file:
+		_lock_file(lock_file)
+		try:
+			yield
+		finally:
+			_unlock_file(lock_file)
+
+
+def _lock_file(lock_file: Any) -> None:
+	if os.name == "nt":
+		import msvcrt
+
+		lock_file.seek(0)
+		while True:
+			try:
+				msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+				return
+			except OSError:
+				time.sleep(0.01)
+
+	import fcntl
+
+	fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file(lock_file: Any) -> None:
+	if os.name == "nt":
+		import msvcrt
+
+		lock_file.seek(0)
+		msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+		return
+
+	import fcntl
+
+	fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _snapshot_file(path: Path) -> bytes | None:
@@ -152,13 +278,23 @@ def _read_json_file(path: Path, expected_type: type[Any], missing_default: Any) 
 
 
 def _ensure_votes_file() -> None:
+	with _json_file_lock(VOTES_FILE):
+		_ensure_votes_file_unlocked()
+
+
+def _ensure_votes_file_unlocked() -> None:
 	if VOTES_FILE.exists():
 		return
 
-	VOTES_FILE.write_text("[]\n", encoding="utf-8")
+	_write_json_file(VOTES_FILE, [])
 
 
 def _ensure_log_store() -> None:
+	with _json_file_lock(META_LOG_FILE):
+		_ensure_log_store_unlocked()
+
+
+def _ensure_log_store_unlocked() -> None:
 	LOGS_DIR.mkdir(parents=True, exist_ok=True)
 	SESSION_LOGS_DIR.mkdir(parents=True, exist_ok=True)
 	if not META_LOG_FILE.exists():
@@ -171,12 +307,13 @@ def _bootstrap_persistence() -> None:
 
 
 def _append_vote_record(record: dict[str, Any]) -> None:
-	_ensure_votes_file()
+	with _json_file_lock(VOTES_FILE):
+		_ensure_votes_file_unlocked()
 
-	existing_records = _read_json_file(VOTES_FILE, list, [])
+		existing_records = _read_json_file(VOTES_FILE, list, [])
 
-	existing_records.append(record)
-	_write_json_file(VOTES_FILE, existing_records)
+		existing_records.append(record)
+		_write_json_file(VOTES_FILE, existing_records)
 
 
 def _remove_vote_record(round_id: str | None) -> None:
@@ -282,83 +419,86 @@ def _build_generation_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _update_meta_log(round_state: dict[str, Any], session_dir: str) -> None:
-	_ensure_log_store()
-	meta_log = _read_json_file(META_LOG_FILE, dict, _empty_meta_log())
-	model_totals = meta_log.setdefault("model_totals", {})
+	with _json_file_lock(META_LOG_FILE):
+		_ensure_log_store_unlocked()
+		meta_log = _read_json_file(META_LOG_FILE, dict, _empty_meta_log())
+		model_totals = meta_log.setdefault("model_totals", {})
 
-	for slot_log in _slot_logs_from_state(round_state):
-		model_id = str(slot_log.get("model_id") or "")
-		if not model_id:
-			continue
+		for slot_log in _slot_logs_from_state(round_state):
+			model_id = str(slot_log.get("model_id") or "")
+			if not model_id:
+				continue
 
-		model_entry = model_totals.setdefault(
-			model_id,
+			model_entry = model_totals.setdefault(
+				model_id,
+				{
+					"model_label": slot_log.get("model_label") or model_id,
+					"provider_key": slot_log.get("provider_key") or "",
+					"appearances": 0,
+					"rank_1_count": 0,
+					"rank_2_count": 0,
+					"rank_3_count": 0,
+					"wins": 0,
+					"error_count": 0,
+					"completion_count": 0,
+					"total_completion_tokens": 0,
+					"total_reasoning_tokens": 0,
+					"total_cost": 0.0,
+				},
+			)
+
+			model_entry["model_label"] = slot_log.get("model_label") or model_entry["model_label"]
+			model_entry["provider_key"] = (
+				slot_log.get("provider_key") or model_entry["provider_key"]
+			)
+			model_entry["appearances"] += 1
+			if slot_log.get("error"):
+				model_entry["error_count"] += 1
+			if slot_log.get("status") == "complete":
+				model_entry["completion_count"] += 1
+			completion_tokens = slot_log.get("completion_tokens")
+			if isinstance(completion_tokens, (int, float)):
+				model_entry["total_completion_tokens"] += int(completion_tokens)
+			reasoning_tokens = slot_log.get("reasoning_tokens")
+			if isinstance(reasoning_tokens, (int, float)):
+				model_entry["total_reasoning_tokens"] += int(reasoning_tokens)
+			cost = slot_log.get("cost")
+			if isinstance(cost, (int, float)):
+				model_entry["total_cost"] = round(model_entry["total_cost"] + float(cost), 8)
+
+		for ranking_entry in _ranking_details_from_state(round_state):
+			model_id = str(ranking_entry.get("model_id") or "")
+			if not model_id or model_id not in model_totals:
+				continue
+			rank = int(ranking_entry.get("rank") or 0)
+			if 1 <= rank <= PANEL_COUNT:
+				model_totals[model_id][f"rank_{rank}_count"] += 1
+				if rank == 1:
+					model_totals[model_id]["wins"] += 1
+
+		meta_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+		meta_log["total_rounds"] = int(meta_log.get("total_rounds") or 0) + 1
+		meta_log.setdefault("round_summaries", []).append(
 			{
-				"model_label": slot_log.get("model_label") or model_id,
-				"provider_key": slot_log.get("provider_key") or "",
-				"appearances": 0,
-				"rank_1_count": 0,
-				"rank_2_count": 0,
-				"rank_3_count": 0,
-				"wins": 0,
-				"error_count": 0,
-				"completion_count": 0,
-				"total_completion_tokens": 0,
-				"total_reasoning_tokens": 0,
-				"total_cost": 0.0,
+				"round_id": round_state.get("round_id"),
+				"created_at": round_state.get("created_at"),
+				"submitted_at": round_state.get("submitted_at"),
+				"prompt_sha256": round_state.get("prompt_sha256") or "",
+				"session_dir": session_dir,
+				"selected_models": [
+					{
+						"selection_slot": slot_log.get("selection_slot"),
+						"model_id": slot_log.get("model_id") or "",
+						"model_label": slot_log.get("model_label") or "",
+					}
+					for slot_log in _slot_logs_from_state(round_state)
+				],
+				"ranking": _ranking_details_from_state(round_state),
+				"errored_slots": round_state.get("errored_slots") or [],
 			},
 		)
 
-		model_entry["model_label"] = slot_log.get("model_label") or model_entry["model_label"]
-		model_entry["provider_key"] = slot_log.get("provider_key") or model_entry["provider_key"]
-		model_entry["appearances"] += 1
-		if slot_log.get("error"):
-			model_entry["error_count"] += 1
-		if slot_log.get("status") == "complete":
-			model_entry["completion_count"] += 1
-		completion_tokens = slot_log.get("completion_tokens")
-		if isinstance(completion_tokens, (int, float)):
-			model_entry["total_completion_tokens"] += int(completion_tokens)
-		reasoning_tokens = slot_log.get("reasoning_tokens")
-		if isinstance(reasoning_tokens, (int, float)):
-			model_entry["total_reasoning_tokens"] += int(reasoning_tokens)
-		cost = slot_log.get("cost")
-		if isinstance(cost, (int, float)):
-			model_entry["total_cost"] = round(model_entry["total_cost"] + float(cost), 8)
-
-	for ranking_entry in _ranking_details_from_state(round_state):
-		model_id = str(ranking_entry.get("model_id") or "")
-		if not model_id or model_id not in model_totals:
-			continue
-		rank = int(ranking_entry.get("rank") or 0)
-		if 1 <= rank <= PANEL_COUNT:
-			model_totals[model_id][f"rank_{rank}_count"] += 1
-			if rank == 1:
-				model_totals[model_id]["wins"] += 1
-
-	meta_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-	meta_log["total_rounds"] = int(meta_log.get("total_rounds") or 0) + 1
-	meta_log.setdefault("round_summaries", []).append(
-		{
-			"round_id": round_state.get("round_id"),
-			"created_at": round_state.get("created_at"),
-			"submitted_at": round_state.get("submitted_at"),
-			"prompt_sha256": round_state.get("prompt_sha256") or "",
-			"session_dir": session_dir,
-			"selected_models": [
-				{
-					"selection_slot": slot_log.get("selection_slot"),
-					"model_id": slot_log.get("model_id") or "",
-					"model_label": slot_log.get("model_label") or "",
-				}
-				for slot_log in _slot_logs_from_state(round_state)
-			],
-			"ranking": _ranking_details_from_state(round_state),
-			"errored_slots": round_state.get("errored_slots") or [],
-		},
-	)
-
-	_write_json_file(META_LOG_FILE, meta_log)
+		_write_json_file(META_LOG_FILE, meta_log)
 
 
 def _round_session_log_path(round_state: dict[str, Any]) -> tuple[Path, str]:
@@ -809,6 +949,23 @@ def _finalize_generation_state(
 	round_state["vote_stage"] = "pick_first" if completed_slots else "unavailable"
 
 
+def _finalize_blocked_generation_state(
+	round_state: dict[str, Any],
+	histories: list[list[Any]],
+	assistant_message_indices: list[int | None],
+	reasoning_message_indices: list[int | None],
+	blocked_slots: set[int],
+) -> None:
+	_finalize_generation_state(
+		round_state,
+		histories,
+		assistant_message_indices,
+		reasoning_message_indices,
+		completed_slots=set(),
+		errored_slots=blocked_slots,
+	)
+
+
 async def stream_all_models(
 	user_text: str,
 	system_prompt: str,
@@ -876,6 +1033,11 @@ async def stream_all_models(
 
 	missing_selection = [index for index, model_id in enumerate(model_ids) if not model_id]
 	if missing_selection:
+		selected_but_unattempted = [
+			index
+			for index, model_id in enumerate(model_ids)
+			if model_id and index not in missing_selection
+		]
 		for index in missing_selection:
 			assistant_message_indices[index] = _upsert_assistant_message(
 				history=histories[index],
@@ -884,8 +1046,22 @@ async def stream_all_models(
 			)
 			round_state["slot_logs"][index]["status"] = "blocked"
 			round_state["slot_logs"][index]["error"] = "No model selected for this panel."
-		_finalize_round_state_logs(
-			round_state, histories, assistant_message_indices, reasoning_message_indices
+		for index in selected_but_unattempted:
+			assistant_message_indices[index] = _upsert_assistant_message(
+				history=histories[index],
+				message_index=assistant_message_indices[index],
+				content="Generation blocked because each panel needs a selected model.",
+			)
+			round_state["slot_logs"][index]["status"] = "blocked"
+			round_state["slot_logs"][index]["error"] = (
+				"Generation blocked because each panel needs a selected model."
+			)
+		_finalize_blocked_generation_state(
+			round_state,
+			histories,
+			assistant_message_indices,
+			reasoning_message_indices,
+			set(range(PANEL_COUNT)),
 		)
 		yield _streaming_outputs(
 			chatbot_updates=_targeted_chatbot_value_updates(
@@ -905,8 +1081,12 @@ async def stream_all_models(
 			)
 			round_state["slot_logs"][index]["status"] = "blocked"
 			round_state["slot_logs"][index]["error"] = "Missing OPENROUTER_API_KEY in environment."
-		_finalize_round_state_logs(
-			round_state, histories, assistant_message_indices, reasoning_message_indices
+		_finalize_blocked_generation_state(
+			round_state,
+			histories,
+			assistant_message_indices,
+			reasoning_message_indices,
+			set(range(PANEL_COUNT)),
 		)
 		yield _streaming_outputs(
 			chatbot_updates=_targeted_chatbot_value_updates(
@@ -1015,340 +1195,352 @@ def clear_histories(panel_1_model: str, panel_2_model: str, panel_3_model: str):
 	return "", *_reset_arena_outputs()
 
 
-default_panel_providers = [_provider_for_model(model_id) for model_id in DEFAULT_PANEL_MODEL_IDS]
-initial_leaderboard_summary, initial_leaderboard_rows = _leaderboard_view_data()
+def create_demo() -> gr.Blocks:
+	global demo
+	global openrouter_status_banner
+	global panel_1_model
+	global panel_1_provider
+	global send_btn
 
+	default_panel_providers = [
+		_provider_for_model(model_id) for model_id in DEFAULT_PANEL_MODEL_IDS
+	]
+	initial_leaderboard_summary, initial_leaderboard_rows = _leaderboard_view_data()
 
-with gr.Blocks(title="LLM Council Arena") as demo:
-	gr.Markdown("# LLM Council Arena")
+	with gr.Blocks(title="LLM Council Arena") as built_demo:
+		gr.Markdown("# LLM Council Arena")
 
-	with gr.Tabs():
-		with gr.Tab("Arena"):
-			openrouter_status_banner = _openrouter_status_banner()
+		with gr.Tabs():
+			with gr.Tab("Arena"):
+				openrouter_status_banner = _openrouter_status_banner()
 
-			with gr.Row():
-				with gr.Column(scale=1):
-					panel_1_provider = gr.Dropdown(
-						label="Provider",
-						choices=PROVIDER_CHOICES,
-						value=default_panel_providers[0],
-						interactive=_selectors_interactive(),
+				with gr.Row():
+					with gr.Column(scale=1):
+						panel_1_provider = gr.Dropdown(
+							label="Provider",
+							choices=PROVIDER_CHOICES,
+							value=default_panel_providers[0],
+							interactive=_selectors_interactive(),
+						)
+						panel_1_model = gr.Dropdown(
+							label="Model",
+							choices=_model_choices_for_provider(default_panel_providers[0]),
+							value=DEFAULT_PANEL_MODEL_IDS[0],
+							interactive=_selectors_interactive(),
+						)
+						(
+							panel_1_reasoning_effort,
+							panel_1_reasoning_cost_hint,
+						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[0])
+
+					with gr.Column(scale=1):
+						panel_2_provider = gr.Dropdown(
+							label="Provider",
+							choices=PROVIDER_CHOICES,
+							value=default_panel_providers[1],
+							interactive=_selectors_interactive(),
+						)
+						panel_2_model = gr.Dropdown(
+							label="Model",
+							choices=_model_choices_for_provider(default_panel_providers[1]),
+							value=DEFAULT_PANEL_MODEL_IDS[1],
+							interactive=_selectors_interactive(),
+						)
+						(
+							panel_2_reasoning_effort,
+							panel_2_reasoning_cost_hint,
+						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[1])
+
+					with gr.Column(scale=1):
+						panel_3_provider = gr.Dropdown(
+							label="Provider",
+							choices=PROVIDER_CHOICES,
+							value=default_panel_providers[2],
+							interactive=_selectors_interactive(),
+						)
+						panel_3_model = gr.Dropdown(
+							label="Model",
+							choices=_model_choices_for_provider(default_panel_providers[2]),
+							value=DEFAULT_PANEL_MODEL_IDS[2],
+							interactive=_selectors_interactive(),
+						)
+						(
+							panel_3_reasoning_effort,
+							panel_3_reasoning_cost_hint,
+						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[2])
+
+				with gr.Accordion("System Prompt", open=False):
+					system_prompt = gr.Textbox(
+						label="Instructions to all models",
+						value=DEFAULT_SYSTEM_PROMPT,
+						lines=4,
 					)
-					panel_1_model = gr.Dropdown(
-						label="Model",
-						choices=_model_choices_for_provider(default_panel_providers[0]),
-						value=DEFAULT_PANEL_MODEL_IDS[0],
-						interactive=_selectors_interactive(),
-					)
-					(
-						panel_1_reasoning_effort,
-						panel_1_reasoning_cost_hint,
-					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[0])
 
-				with gr.Column(scale=1):
-					panel_2_provider = gr.Dropdown(
-						label="Provider",
-						choices=PROVIDER_CHOICES,
-						value=default_panel_providers[1],
-						interactive=_selectors_interactive(),
-					)
-					panel_2_model = gr.Dropdown(
-						label="Model",
-						choices=_model_choices_for_provider(default_panel_providers[1]),
-						value=DEFAULT_PANEL_MODEL_IDS[1],
-						interactive=_selectors_interactive(),
-					)
-					(
-						panel_2_reasoning_effort,
-						panel_2_reasoning_cost_hint,
-					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[1])
+				user_input = gr.Textbox(
+					label="Prompt",
+					placeholder="Type your prompt and click Send...",
+					lines=3,
+				)
+				send_btn = gr.Button("Send", interactive=_selectors_interactive())
+				round_state = gr.State(_empty_round_state())
 
-				with gr.Column(scale=1):
-					panel_3_provider = gr.Dropdown(
-						label="Provider",
-						choices=PROVIDER_CHOICES,
-						value=default_panel_providers[2],
-						interactive=_selectors_interactive(),
-					)
-					panel_3_model = gr.Dropdown(
-						label="Model",
-						choices=_model_choices_for_provider(default_panel_providers[2]),
-						value=DEFAULT_PANEL_MODEL_IDS[2],
-						interactive=_selectors_interactive(),
-					)
-					(
-						panel_3_reasoning_effort,
-						panel_3_reasoning_cost_hint,
-					) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[2])
+				with gr.Row():
+					with gr.Column(scale=1):
+						panel_1_chat = _chatbot_config(label=_panel_label(0), height=520)
+					with gr.Column(scale=1):
+						panel_2_chat = _chatbot_config(label=_panel_label(1), height=520)
+					with gr.Column(scale=1):
+						panel_3_chat = _chatbot_config(label=_panel_label(2), height=520)
 
-			with gr.Accordion("System Prompt", open=False):
-				system_prompt = gr.Textbox(
-					label="Instructions to all models",
-					value=DEFAULT_SYSTEM_PROMPT,
-					lines=4,
+				with gr.Group():
+					gr.Markdown("## Vote on the Anonymous Responses")
+					with gr.Row():
+						vote_response_a_btn = gr.Button(_panel_label(0), interactive=False)
+						vote_response_b_btn = gr.Button(_panel_label(1), interactive=False)
+						vote_response_c_btn = gr.Button(_panel_label(2), interactive=False)
+					with gr.Row():
+						vote_reset_btn = gr.Button("Reset Vote", interactive=False)
+						vote_submit_btn = gr.Button("Submit Vote", interactive=False)
+					vote_status_banner = gr.HTML(value="", visible=False)
+
+			with gr.Tab("Leaderboard"):
+				leaderboard_summary_md = gr.Markdown(initial_leaderboard_summary)
+				leaderboard_table = gr.Dataframe(
+					headers=["Rank", "Model", "Provider", "Wins", "Appearances", "Win Rate"],
+					value=initial_leaderboard_rows,
+					interactive=False,
+					wrap=True,
 				)
 
-			user_input = gr.Textbox(
-				label="Prompt",
-				placeholder="Type your prompt and click Send...",
-				lines=3,
-			)
-			send_btn = gr.Button("Send", interactive=_selectors_interactive())
-			round_state = gr.State(_empty_round_state())
-
-			with gr.Row():
-				with gr.Column(scale=1):
-					panel_1_chat = _chatbot_config(label=_panel_label(0), height=520)
-				with gr.Column(scale=1):
-					panel_2_chat = _chatbot_config(label=_panel_label(1), height=520)
-				with gr.Column(scale=1):
-					panel_3_chat = _chatbot_config(label=_panel_label(2), height=520)
-
-			with gr.Group():
-				gr.Markdown("## Vote on the Anonymous Responses")
-				with gr.Row():
-					vote_response_a_btn = gr.Button(_panel_label(0), interactive=False)
-					vote_response_b_btn = gr.Button(_panel_label(1), interactive=False)
-					vote_response_c_btn = gr.Button(_panel_label(2), interactive=False)
-				with gr.Row():
-					vote_reset_btn = gr.Button("Reset Vote", interactive=False)
-					vote_submit_btn = gr.Button("Submit Vote", interactive=False)
-				vote_status_banner = gr.HTML(value="", visible=False)
-
-		with gr.Tab("Leaderboard"):
-			leaderboard_summary_md = gr.Markdown(initial_leaderboard_summary)
-			leaderboard_table = gr.Dataframe(
-				headers=["Rank", "Model", "Provider", "Wins", "Appearances", "Win Rate"],
-				value=initial_leaderboard_rows,
-				interactive=False,
-				wrap=True,
-			)
-
-	submit_outputs = [
-		user_input,
-		panel_1_chat,
-		panel_2_chat,
-		panel_3_chat,
-		round_state,
-		vote_response_a_btn,
-		vote_response_b_btn,
-		vote_response_c_btn,
-		vote_reset_btn,
-		vote_submit_btn,
-		vote_status_banner,
-	]
-	submit_inputs = [
-		user_input,
-		system_prompt,
-		panel_1_model,
-		panel_2_model,
-		panel_3_model,
-		panel_1_reasoning_effort,
-		panel_2_reasoning_effort,
-		panel_3_reasoning_effort,
-	]
-
-	panel_1_provider.change(
-		fn=update_panel_provider,
-		inputs=[panel_1_provider],
-		outputs=[
+		submit_outputs = [
+			user_input,
+			panel_1_chat,
+			panel_2_chat,
+			panel_3_chat,
+			round_state,
+			vote_response_a_btn,
+			vote_response_b_btn,
+			vote_response_c_btn,
+			vote_reset_btn,
+			vote_submit_btn,
+			vote_status_banner,
+		]
+		submit_inputs = [
+			user_input,
+			system_prompt,
 			panel_1_model,
-			panel_1_reasoning_effort,
-			panel_1_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	panel_2_provider.change(
-		fn=update_panel_provider,
-		inputs=[panel_2_provider],
-		outputs=[
 			panel_2_model,
-			panel_2_reasoning_effort,
-			panel_2_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	panel_3_provider.change(
-		fn=update_panel_provider,
-		inputs=[panel_3_provider],
-		outputs=[
 			panel_3_model,
-			panel_3_reasoning_effort,
-			panel_3_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-
-	panel_1_model.change(
-		fn=update_panel_model,
-		inputs=[panel_1_model],
-		outputs=[
 			panel_1_reasoning_effort,
-			panel_1_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	panel_2_model.change(
-		fn=update_panel_model,
-		inputs=[panel_2_model],
-		outputs=[
 			panel_2_reasoning_effort,
-			panel_2_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	panel_3_model.change(
-		fn=update_panel_model,
-		inputs=[panel_3_model],
-		outputs=[
 			panel_3_reasoning_effort,
-			panel_3_reasoning_cost_hint,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	user_input.submit(
-		fn=stream_all_models,
-		inputs=submit_inputs,
-		outputs=submit_outputs,
-		show_progress="hidden",
-	)
-	send_btn.click(
-		fn=stream_all_models,
-		inputs=submit_inputs,
-		outputs=submit_outputs,
-		show_progress="hidden",
-	)
-	vote_response_a_btn.click(
-		fn=vote_response_a,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	vote_response_b_btn.click(
-		fn=vote_response_b,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	vote_response_c_btn.click(
-		fn=vote_response_c,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	vote_reset_btn.click(
-		fn=reset_vote,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		],
-	)
-	vote_submit_btn.click(
-		fn=submit_vote,
-		inputs=[round_state],
-		outputs=[
-			round_state,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-			leaderboard_summary_md,
-			leaderboard_table,
-		],
-	)
-	demo.load(
-		fn=_leaderboard_view_data,
-		inputs=None,
-		outputs=[leaderboard_summary_md, leaderboard_table],
-	)
+		]
+
+		panel_1_provider.change(
+			fn=update_panel_provider,
+			inputs=[panel_1_provider],
+			outputs=[
+				panel_1_model,
+				panel_1_reasoning_effort,
+				panel_1_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		panel_2_provider.change(
+			fn=update_panel_provider,
+			inputs=[panel_2_provider],
+			outputs=[
+				panel_2_model,
+				panel_2_reasoning_effort,
+				panel_2_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		panel_3_provider.change(
+			fn=update_panel_provider,
+			inputs=[panel_3_provider],
+			outputs=[
+				panel_3_model,
+				panel_3_reasoning_effort,
+				panel_3_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+
+		panel_1_model.change(
+			fn=update_panel_model,
+			inputs=[panel_1_model],
+			outputs=[
+				panel_1_reasoning_effort,
+				panel_1_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		panel_2_model.change(
+			fn=update_panel_model,
+			inputs=[panel_2_model],
+			outputs=[
+				panel_2_reasoning_effort,
+				panel_2_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		panel_3_model.change(
+			fn=update_panel_model,
+			inputs=[panel_3_model],
+			outputs=[
+				panel_3_reasoning_effort,
+				panel_3_reasoning_cost_hint,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		user_input.submit(
+			fn=stream_all_models,
+			inputs=submit_inputs,
+			outputs=submit_outputs,
+			show_progress="hidden",
+		)
+		send_btn.click(
+			fn=stream_all_models,
+			inputs=submit_inputs,
+			outputs=submit_outputs,
+			show_progress="hidden",
+		)
+		vote_response_a_btn.click(
+			fn=vote_response_a,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		vote_response_b_btn.click(
+			fn=vote_response_b,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		vote_response_c_btn.click(
+			fn=vote_response_c,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		vote_reset_btn.click(
+			fn=reset_vote,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+			],
+		)
+		vote_submit_btn.click(
+			fn=submit_vote,
+			inputs=[round_state],
+			outputs=[
+				round_state,
+				panel_1_chat,
+				panel_2_chat,
+				panel_3_chat,
+				vote_response_a_btn,
+				vote_response_b_btn,
+				vote_response_c_btn,
+				vote_reset_btn,
+				vote_submit_btn,
+				vote_status_banner,
+				leaderboard_summary_md,
+				leaderboard_table,
+			],
+		)
+		built_demo.load(
+			fn=_leaderboard_view_data,
+			inputs=None,
+			outputs=[leaderboard_summary_md, leaderboard_table],
+		)
+
+	demo = built_demo
+	return built_demo
 
 
 if __name__ == "__main__":
 	_bootstrap_persistence()
-	demo.queue().launch()
+	initialize_model_catalog()
+	create_demo().queue().launch()
