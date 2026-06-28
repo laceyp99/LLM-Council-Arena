@@ -308,18 +308,27 @@ def _bootstrap_persistence() -> None:
 
 def _append_vote_record(record: dict[str, Any]) -> None:
 	with _json_file_lock(VOTES_FILE):
-		_ensure_votes_file_unlocked()
+		_append_vote_record_unlocked(record)
 
-		existing_records = _read_json_file(VOTES_FILE, list, [])
 
-		existing_records.append(record)
-		_write_json_file(VOTES_FILE, existing_records)
+def _append_vote_record_unlocked(record: dict[str, Any]) -> None:
+	_ensure_votes_file_unlocked()
+
+	existing_records = _read_json_file(VOTES_FILE, list, [])
+
+	existing_records.append(record)
+	_write_json_file(VOTES_FILE, existing_records)
 
 
 def _remove_vote_record(round_id: str | None) -> None:
 	if not round_id or not VOTES_FILE.exists():
 		return
 
+	with _json_file_lock(VOTES_FILE):
+		_remove_vote_record_unlocked(round_id)
+
+
+def _remove_vote_record_unlocked(round_id: str) -> None:
 	existing_records = _read_json_file(VOTES_FILE, list, [])
 	remaining_records = [
 		record
@@ -420,85 +429,87 @@ def _build_generation_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 
 def _update_meta_log(round_state: dict[str, Any], session_dir: str) -> None:
 	with _json_file_lock(META_LOG_FILE):
-		_ensure_log_store_unlocked()
-		meta_log = _read_json_file(META_LOG_FILE, dict, _empty_meta_log())
-		model_totals = meta_log.setdefault("model_totals", {})
+		_update_meta_log_unlocked(round_state, session_dir)
 
-		for slot_log in _slot_logs_from_state(round_state):
-			model_id = str(slot_log.get("model_id") or "")
-			if not model_id:
-				continue
 
-			model_entry = model_totals.setdefault(
-				model_id,
-				{
-					"model_label": slot_log.get("model_label") or model_id,
-					"provider_key": slot_log.get("provider_key") or "",
-					"appearances": 0,
-					"rank_1_count": 0,
-					"rank_2_count": 0,
-					"rank_3_count": 0,
-					"wins": 0,
-					"error_count": 0,
-					"completion_count": 0,
-					"total_completion_tokens": 0,
-					"total_reasoning_tokens": 0,
-					"total_cost": 0.0,
-				},
-			)
+def _update_meta_log_unlocked(round_state: dict[str, Any], session_dir: str) -> None:
+	_ensure_log_store_unlocked()
+	meta_log = _read_json_file(META_LOG_FILE, dict, _empty_meta_log())
+	model_totals = meta_log.setdefault("model_totals", {})
 
-			model_entry["model_label"] = slot_log.get("model_label") or model_entry["model_label"]
-			model_entry["provider_key"] = (
-				slot_log.get("provider_key") or model_entry["provider_key"]
-			)
-			model_entry["appearances"] += 1
-			if slot_log.get("error"):
-				model_entry["error_count"] += 1
-			if slot_log.get("status") == "complete":
-				model_entry["completion_count"] += 1
-			completion_tokens = slot_log.get("completion_tokens")
-			if isinstance(completion_tokens, (int, float)):
-				model_entry["total_completion_tokens"] += int(completion_tokens)
-			reasoning_tokens = slot_log.get("reasoning_tokens")
-			if isinstance(reasoning_tokens, (int, float)):
-				model_entry["total_reasoning_tokens"] += int(reasoning_tokens)
-			cost = slot_log.get("cost")
-			if isinstance(cost, (int, float)):
-				model_entry["total_cost"] = round(model_entry["total_cost"] + float(cost), 8)
+	for slot_log in _slot_logs_from_state(round_state):
+		model_id = str(slot_log.get("model_id") or "")
+		if not model_id:
+			continue
 
-		for ranking_entry in _ranking_details_from_state(round_state):
-			model_id = str(ranking_entry.get("model_id") or "")
-			if not model_id or model_id not in model_totals:
-				continue
-			rank = int(ranking_entry.get("rank") or 0)
-			if 1 <= rank <= PANEL_COUNT:
-				model_totals[model_id][f"rank_{rank}_count"] += 1
-				if rank == 1:
-					model_totals[model_id]["wins"] += 1
-
-		meta_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-		meta_log["total_rounds"] = int(meta_log.get("total_rounds") or 0) + 1
-		meta_log.setdefault("round_summaries", []).append(
+		model_entry = model_totals.setdefault(
+			model_id,
 			{
-				"round_id": round_state.get("round_id"),
-				"created_at": round_state.get("created_at"),
-				"submitted_at": round_state.get("submitted_at"),
-				"prompt_sha256": round_state.get("prompt_sha256") or "",
-				"session_dir": session_dir,
-				"selected_models": [
-					{
-						"selection_slot": slot_log.get("selection_slot"),
-						"model_id": slot_log.get("model_id") or "",
-						"model_label": slot_log.get("model_label") or "",
-					}
-					for slot_log in _slot_logs_from_state(round_state)
-				],
-				"ranking": _ranking_details_from_state(round_state),
-				"errored_slots": round_state.get("errored_slots") or [],
+				"model_label": slot_log.get("model_label") or model_id,
+				"provider_key": slot_log.get("provider_key") or "",
+				"appearances": 0,
+				"rank_1_count": 0,
+				"rank_2_count": 0,
+				"rank_3_count": 0,
+				"wins": 0,
+				"error_count": 0,
+				"completion_count": 0,
+				"total_completion_tokens": 0,
+				"total_reasoning_tokens": 0,
+				"total_cost": 0.0,
 			},
 		)
 
-		_write_json_file(META_LOG_FILE, meta_log)
+		model_entry["model_label"] = slot_log.get("model_label") or model_entry["model_label"]
+		model_entry["provider_key"] = slot_log.get("provider_key") or model_entry["provider_key"]
+		model_entry["appearances"] += 1
+		if slot_log.get("error"):
+			model_entry["error_count"] += 1
+		if slot_log.get("status") == "complete":
+			model_entry["completion_count"] += 1
+		completion_tokens = slot_log.get("completion_tokens")
+		if isinstance(completion_tokens, (int, float)):
+			model_entry["total_completion_tokens"] += int(completion_tokens)
+		reasoning_tokens = slot_log.get("reasoning_tokens")
+		if isinstance(reasoning_tokens, (int, float)):
+			model_entry["total_reasoning_tokens"] += int(reasoning_tokens)
+		cost = slot_log.get("cost")
+		if isinstance(cost, (int, float)):
+			model_entry["total_cost"] = round(model_entry["total_cost"] + float(cost), 8)
+
+	for ranking_entry in _ranking_details_from_state(round_state):
+		model_id = str(ranking_entry.get("model_id") or "")
+		if not model_id or model_id not in model_totals:
+			continue
+		rank = int(ranking_entry.get("rank") or 0)
+		if 1 <= rank <= PANEL_COUNT:
+			model_totals[model_id][f"rank_{rank}_count"] += 1
+			if rank == 1:
+				model_totals[model_id]["wins"] += 1
+
+	meta_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+	meta_log["total_rounds"] = int(meta_log.get("total_rounds") or 0) + 1
+	meta_log.setdefault("round_summaries", []).append(
+		{
+			"round_id": round_state.get("round_id"),
+			"created_at": round_state.get("created_at"),
+			"submitted_at": round_state.get("submitted_at"),
+			"prompt_sha256": round_state.get("prompt_sha256") or "",
+			"session_dir": session_dir,
+			"selected_models": [
+				{
+					"selection_slot": slot_log.get("selection_slot"),
+					"model_id": slot_log.get("model_id") or "",
+					"model_label": slot_log.get("model_label") or "",
+				}
+				for slot_log in _slot_logs_from_state(round_state)
+			],
+			"ranking": _ranking_details_from_state(round_state),
+			"errored_slots": round_state.get("errored_slots") or [],
+		},
+	)
+
+	_write_json_file(META_LOG_FILE, meta_log)
 
 
 def _round_session_log_path(round_state: dict[str, Any]) -> tuple[Path, str]:
@@ -540,22 +551,26 @@ def _write_round_session_artifacts(round_state: dict[str, Any], session_dir: Pat
 def _persist_vote_submission(round_state: dict[str, Any]) -> str:
 	_ensure_log_store()
 	session_dir, session_dir_relative = _round_session_log_path(round_state)
-	votes_snapshot = _snapshot_file(VOTES_FILE)
-	meta_snapshot = _snapshot_file(META_LOG_FILE)
 
-	try:
-		_append_vote_record(_build_vote_record(round_state, session_dir_relative))
-		_write_round_session_artifacts(round_state, session_dir)
-		_update_meta_log(round_state, session_dir_relative)
-	except Exception:
-		shutil.rmtree(session_dir, ignore_errors=True)
+	with _json_file_lock(VOTES_FILE), _json_file_lock(META_LOG_FILE):
+		votes_snapshot = _snapshot_file(VOTES_FILE)
+		meta_snapshot = _snapshot_file(META_LOG_FILE)
+
 		try:
-			_restore_file(META_LOG_FILE, meta_snapshot)
-			_restore_file(VOTES_FILE, votes_snapshot)
+			_append_vote_record_unlocked(_build_vote_record(round_state, session_dir_relative))
+			_write_round_session_artifacts(round_state, session_dir)
+			_update_meta_log_unlocked(round_state, session_dir_relative)
 		except Exception:
-			_remove_vote_record(round_state.get("round_id"))
+			shutil.rmtree(session_dir, ignore_errors=True)
+			try:
+				_restore_file(META_LOG_FILE, meta_snapshot)
+				_restore_file(VOTES_FILE, votes_snapshot)
+			except Exception:
+				round_id = round_state.get("round_id")
+				if round_id:
+					_remove_vote_record_unlocked(str(round_id))
+				raise
 			raise
-		raise
 
 	return session_dir_relative
 

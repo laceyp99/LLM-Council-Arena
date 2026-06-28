@@ -114,7 +114,7 @@ def test_submit_vote_cleans_up_partial_session_artifacts_when_meta_update_fails(
 	monkeypatch.setattr(app_module, "_write_json_file", tracking_write_json_file)
 	monkeypatch.setattr(
 		app_module,
-		"_update_meta_log",
+		"_update_meta_log_unlocked",
 		lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("meta store unavailable")),
 	)
 
@@ -156,7 +156,7 @@ def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp
 	_stub_chatbot_updates(monkeypatch)
 	_patch_log_paths(monkeypatch, tmp_path)
 	round_state = _build_votable_round_state()
-	original_append_vote_record = app_module._append_vote_record
+	original_append_vote_record = app_module._append_vote_record_unlocked
 	append_attempts = 0
 
 	def fail_once_append_vote_record(record) -> None:
@@ -166,7 +166,7 @@ def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp
 			raise OSError("disk full")
 		original_append_vote_record(record)
 
-	monkeypatch.setattr(app_module, "_append_vote_record", fail_once_append_vote_record)
+	monkeypatch.setattr(app_module, "_append_vote_record_unlocked", fail_once_append_vote_record)
 
 	outputs = app_module.submit_vote(round_state)
 	submitted_state = outputs[0]
