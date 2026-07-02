@@ -17,7 +17,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          forbidden='(^|/)(.*\.db|.*\.sqlite|.*\.sqlite3|.*-journal|.*-wal|.*-shm|\.env(\..*)?|mcp_browser_clients\.local\.json)$'
+          forbidden='(^|/)(.*\.db|.*\.sqlite|.*\.sqlite3|.*-journal|.*-wal|.*-shm|\.env(\..*)?|mcp_browser_clients\.local\.json)$|^(votes\.json|arena_logs/.*)$'
           matches="$(git ls-files | grep -E "$forbidden" || true)"
 
           if [ -n "$matches" ]; then
