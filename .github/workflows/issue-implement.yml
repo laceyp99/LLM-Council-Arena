@@ -1,0 +1,555 @@
+name: Issue Implementation
+
+on:
+  issues:
+    types:
+      - labeled
+
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number for the agent to implement"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# Draft PR creation also requires the repository Actions setting
+# "Allow GitHub Actions to create and approve pull requests".
+# The permissions block above cannot enable that setting by itself.
+concurrency:
+  group: agent-issue-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    name: Build PR solution for agent-ready issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.actor == github.repository_owner &&
+        github.event.issue.state == 'open' &&
+        github.event.label.name == 'agent-ready'
+      )
+
+    steps:
+      - name: Resolve and validate issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          ACTOR: ${{ github.actor }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ "$ACTOR" != "$REPO_OWNER" ]; then
+            echo "::error::Actor '$ACTOR' is not the repository owner. Refusing to run."
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            ISSUE_NUMBER="$INPUT_ISSUE_NUMBER"
+          else
+            ISSUE_NUMBER="$EVENT_ISSUE_NUMBER"
+          fi
+
+          STATE="$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json state --jq .state)"
+          if [ "$STATE" != "OPEN" ]; then
+            echo "::error::Issue #$ISSUE_NUMBER is not open (state: $STATE). Refusing to run."
+            exit 1
+          fi
+
+          HAS_LABEL="$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json labels --jq '[.labels[].name] | contains(["agent-ready"])')"
+          if [ "$HAS_LABEL" != "true" ]; then
+            echo "::error::Issue #$ISSUE_NUMBER does not carry the agent-ready label. Refusing to run."
+            exit 1
+          fi
+
+          if gh pr list -R "$REPO" --state open --json headRefName --jq '.[].headRefName' \
+            | grep -q "^agent/issue-${ISSUE_NUMBER}-"; then
+            echo "::error::An open agent PR already exists for issue #$ISSUE_NUMBER (branch agent/issue-${ISSUE_NUMBER}-*). Skipping duplicate run."
+            exit 1
+          fi
+
+          echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+
+      # Create the labels this workflow relies on up front so every later
+      # step (and any repo this workflow is copied into) can assume they
+      # exist. Creation is idempotent: if a label is already present, the
+      # command is a no-op and any custom color/description is preserved.
+      - name: Ensure agent labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create "agent-pr-opened" \
+            -R "$REPO" \
+            --color "1f883d" \
+            --description "An agent-created draft PR is open for this issue." \
+            2>/dev/null || true
+
+          gh label create "agent-blocked" \
+            -R "$REPO" \
+            --color "d73a4a" \
+            --description "An agent run for this issue failed and needs human attention." \
+            2>/dev/null || true
+
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+
+      - name: Checkout trusted Codex assets from default branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          path: trusted-base
+          persist-credentials: false
+          sparse-checkout: .github/codex
+
+      - name: Configure git identity
+        run: |
+          git config user.name "agent-bot"
+          git config user.email "agent-bot@users.noreply.github.com"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+
+      - name: Create worktree branch
+        id: branch
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          BRANCH="agent/issue-${ISSUE_NUMBER}-run-${RUN_ID}"
+          git fetch origin
+          git switch "${{ github.event.repository.default_branch || 'main' }}"
+          git pull --ff-only
+          git worktree add "../agent-worktree" -b "$BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Capture issue context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          gh issue view "$ISSUE_NUMBER" \
+            --json number,title,body,labels,comments,url \
+            | jq '.comments |= map(select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR"))' \
+            > ../agent-worktree/issue-context.json
+
+      - name: Install dependencies
+        working-directory: ../agent-worktree
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Run Codex implementation
+        id: run_codex
+        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ vars.CODEX_MODEL || 'gpt-5.5' }}
+          effort: ${{ vars.CODEX_EFFORT || 'medium' }}
+          working-directory: ../agent-worktree
+          prompt-file: trusted-base/.github/codex/prompts/issue-implement.md
+          sandbox: workspace-write
+          codex-home: trusted-base/.github/codex/home
+          output-file: codex-issue-implementation.md
+
+      - name: Run project checks if available
+        id: validate
+        working-directory: ../agent-worktree
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_check() {
+            echo "$*" > ../agent-validation-failed-command.txt
+            echo "\$ $*" >> ../agent-validation-output.log
+            "$@" 2>&1 | tee -a ../agent-validation-output.log
+          }
+
+          if [ -f package.json ]; then
+            run_check npm test -- --watch=false || run_check npm test
+          elif [ -f pyproject.toml ]; then
+            run_check python -m ruff format --check .
+            run_check python -m ruff check .
+            run_check python -m pytest
+          elif [ -f Makefile ]; then
+            run_check make test
+          else
+            echo "No standard test command detected."
+            echo "No standard test command detected." > ../agent-validation-failed-command.txt
+            exit 1
+          fi
+
+      - name: Capture failed validation patch
+        if: steps.validate.outcome == 'failure'
+        working-directory: ../agent-worktree
+        shell: bash
+        run: |
+          patch_file="../agent-validation-failure.patch"
+          git diff --binary > "$patch_file"
+
+          while IFS= read -r -d '' file; do
+            git diff --binary --no-index /dev/null "$file" >> "$patch_file" || true
+          done < <(git ls-files --others --exclude-standard -z \
+            | grep -zEv '^(issue-context\.json|codex-issue-implementation\.md)$' || true)
+
+      - name: Upload failed validation patch
+        if: steps.validate.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-validation-failure-${{ steps.issue.outputs.number }}
+          path: ../agent-validation-failure.patch
+          if-no-files-found: ignore
+
+      - name: Read failed validation details
+        if: steps.validate.outcome == 'failure'
+        id: failed_validation
+        shell: bash
+        run: |
+          {
+            echo "command<<__AGENT_EOF__"
+            cat ../agent-validation-failed-command.txt
+            echo "__AGENT_EOF__"
+            echo "log<<__AGENT_EOF__"
+            tail -n 80 ../agent-validation-output.log 2>/dev/null || echo "No validation output was captured."
+            echo "__AGENT_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment when validation failed
+        if: steps.validate.outcome == 'failure'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          AGENT_SUMMARY: ${{ steps.run_codex.outputs.final-message }}
+          FAILED_VALIDATION: ${{ steps.failed_validation.outputs.command }}
+          FAILED_VALIDATION_LOG: ${{ steps.failed_validation.outputs.log }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                "## Agent implementation blocked",
+                "",
+                "Validation failed, so no branch was pushed and no pull request was opened.",
+                "",
+                `Failed validation: \`${process.env.FAILED_VALIDATION || "unknown"}\``,
+                "",
+                "### Validation output (tail)",
+                "",
+                "```text",
+                process.env.FAILED_VALIDATION_LOG || "No validation output was captured.",
+                "```",
+                "",
+                `Failed run: ${process.env.RUN_URL}`,
+                "",
+                "A patch artifact named `agent-validation-failure-" + process.env.ISSUE_NUMBER + "` was uploaded with the agent's attempted changes.",
+                "",
+                "## Agent notes",
+                "",
+                process.env.AGENT_SUMMARY || "_No additional summary was returned._"
+              ].join("\n")
+            });
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                name: "agent-ready"
+              });
+            } catch (e) { /* label may already be absent */ }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: ["agent-blocked"]
+            });
+
+      - name: Stop after validation failure
+        if: steps.validate.outcome == 'failure'
+        run: exit 1
+
+      - name: Commit changes if any
+        if: steps.validate.outcome == 'success'
+        id: commit
+        working-directory: ../agent-worktree
+        continue-on-error: true
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          # Remove workflow-generated context/output artifacts so they never
+          # count as changes and never end up in the commit via `git add -A`.
+          rm -f issue-context.json codex-issue-implementation.md
+
+          if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git add -A
+
+          # Block local runtime artifacts, workflow-generated context files,
+          # and any edits under .github/workflows/. The GITHUB_TOKEN cannot
+          # push workflow file changes anyway (it lacks the `workflows`
+          # permission), so catching them here fails cleanly with an issue
+          # comment instead of a cryptic push error, and it stops the agent
+          # from attempting to rewrite its own automation.
+          forbidden='(^|/)(.*\.db|.*\.sqlite|.*\.sqlite3|.*-journal|.*-wal|.*-shm|\.env(\..*)?|mcp_browser_clients\.local\.json|issue-context\.json|codex-issue-implementation\.md)$|^(votes\.json|arena_logs/.*)$|^\.github/workflows/'
+          matches="$(git diff --cached --name-only | grep -E "$forbidden" || true)"
+
+          if [ -n "$matches" ]; then
+            echo "Forbidden local artifacts were staged:"
+            echo "$matches"
+            echo "block_reason=forbidden_artifacts" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          git commit -m "Implement issue #${ISSUE_NUMBER}"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment when forbidden artifacts were blocked
+        if: steps.commit.outcome == 'failure' && steps.commit.outputs.block_reason == 'forbidden_artifacts'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.ISSUE_NUMBER),
+              body: [
+                "## Agent implementation blocked",
+                "",
+                "The agent attempted changes that included forbidden local artifacts or private runtime files.",
+                "",
+                "No branch was pushed and no pull request was opened.",
+                "",
+                `Run: ${process.env.RUN_URL}`
+              ].join("\n")
+            });
+
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                name: "agent-ready"
+              });
+            } catch (e) { /* label may already be absent */ }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: ["agent-blocked"]
+            });
+
+      - name: Stop after forbidden artifact block
+        if: steps.commit.outcome == 'failure'
+        run: exit 1
+
+      - name: Push branch
+        id: push
+        if: steps.validate.outcome == 'success' && steps.commit.outcome == 'success' && steps.commit.outputs.has_changes == 'true'
+        working-directory: ../agent-worktree
+        env:
+          BRANCH_NAME: ${{ steps.branch.outputs.name }}
+        run: |
+          git push --set-upstream origin "$BRANCH_NAME"
+
+      - name: Open draft pull request
+        id: create_pr
+        if: steps.validate.outcome == 'success' && steps.commit.outcome == 'success' && steps.commit.outputs.has_changes == 'true'
+        working-directory: ../agent-worktree
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          BRANCH_NAME: ${{ steps.branch.outputs.name }}
+          AGENT_SUMMARY: ${{ steps.run_codex.outputs.final-message }}
+        run: |
+          gh pr create \
+            --draft \
+            --base "${{ github.event.repository.default_branch || 'main' }}" \
+            --head "$BRANCH_NAME" \
+            --title "Draft: Implement issue #${ISSUE_NUMBER}" \
+            --body "$(cat <<EOF
+          ## Related Links
+
+          - Closes #${ISSUE_NUMBER}
+
+          ## Summary
+
+          Agent-generated implementation for issue #${ISSUE_NUMBER}. This PR attempts to satisfy the linked issue while keeping the change scope limited to the issue requirements.
+
+          ## Changes
+
+          ${AGENT_SUMMARY}
+
+          ## Validation
+
+          - [x] Agent validation passed: \`python -m ruff format --check .\`, \`python -m ruff check .\`, and \`python -m pytest\`
+          - [ ] Human reviewed the implementation
+          - [ ] Human checked relevant edge cases
+          - [ ] Human confirmed issue requirements are fully satisfied
+
+          ## Other Notes
+
+          This draft PR was created automatically. Human review is required before marking it ready for review or merging.
+
+          EOF
+          )"
+
+      - name: Update issue agent labels
+        id: update_labels
+        if: steps.create_pr.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" \
+            --remove-label "agent-ready" \
+            --add-label "agent-pr-opened"
+
+      - name: Comment when no changes were produced
+        if: steps.validate.outcome == 'success' && steps.commit.outcome == 'success' && steps.commit.outputs.has_changes == 'false'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          AGENT_SUMMARY: ${{ steps.run_codex.outputs.final-message }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.ISSUE_NUMBER),
+              body: [
+                "## Agent attempted implementation",
+                "",
+                "The agent did not produce file changes.",
+                "",
+                process.env.AGENT_SUMMARY || "_No additional summary was returned._"
+              ].join("\n")
+            });
+
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                name: "agent-ready"
+              });
+            } catch (e) { /* label may already be absent */ }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: ["agent-blocked"]
+            });
+
+      - name: Comment when issue workflow failed
+        if: >
+          always() &&
+          failure() &&
+          steps.issue.outputs.number != '' &&
+          steps.validate.outcome != 'failure' &&
+          (
+            steps.commit.outcome != 'failure' ||
+            steps.commit.outputs.block_reason != 'forbidden_artifacts'
+          )
+        continue-on-error: true
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRANCH_NAME: ${{ steps.branch.outputs.name }}
+          AGENT_SUMMARY: ${{ steps.run_codex.outputs.final-message }}
+          CODEX_OUTCOME: ${{ steps.run_codex.outcome }}
+          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
+          CREATE_PR_OUTCOME: ${{ steps.create_pr.outcome }}
+          LABEL_UPDATE_OUTCOME: ${{ steps.update_labels.outcome }}
+        with:
+          script: |
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+
+            const outcomes = [
+              ["Codex implementation", process.env.CODEX_OUTCOME],
+              ["workflow validation", process.env.VALIDATION_OUTCOME],
+              ["commit", process.env.COMMIT_OUTCOME],
+              ["push", process.env.PUSH_OUTCOME],
+              ["draft PR creation", process.env.CREATE_PR_OUTCOME],
+              ["issue label update", process.env.LABEL_UPDATE_OUTCOME],
+            ].filter(([, outcome]) => outcome && outcome !== "");
+
+            const body = [
+              "## Agent workflow failed",
+              "",
+              "The agent workflow failed after issue validation, so the normal handoff did not complete.",
+              "",
+              process.env.BRANCH_NAME
+                ? `Working branch: \`${process.env.BRANCH_NAME}\``
+                : "Working branch: unavailable",
+              `Run: ${process.env.RUN_URL}`,
+              "",
+              "### Step outcomes",
+              "",
+              ...outcomes.map(([name, outcome]) => `- ${name}: ${outcome}`),
+              "",
+              "## Agent notes",
+              "",
+              process.env.AGENT_SUMMARY || "_No additional summary was returned._",
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                name: "agent-ready"
+              });
+            } catch (e) { /* label may already be absent */ }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: ["agent-blocked"]
+            });
