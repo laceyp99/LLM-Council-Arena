@@ -1,0 +1,258 @@
+name: PR Review
+
+on:
+  pull_request:
+    types:
+      - ready_for_review
+
+  # Optional manual escape hatch.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review manually"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: agent-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Generate PR review notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Skip draft PRs if this workflow is ever expanded to opened/synchronize.
+    # Fork PRs are not supported: secrets are unavailable and the token is
+    # read-only for forks, so the review could never post anyway.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      )
+
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+
+    steps:
+      - name: Resolve PR number
+        id: pr
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=$EVENT_PR_NUMBER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout PR merge commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: refs/pull/${{ steps.pr.outputs.number }}/merge
+          persist-credentials: false
+
+      # The PR checkout above contains whatever the PR author wrote, including
+      # any edits to the review prompt itself. Check out the prompts from the
+      # default branch separately so a PR cannot rewrite its own reviewer
+      # instructions (prompt injection).
+      - name: Checkout trusted Codex assets from default branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          path: trusted-base
+          persist-credentials: false
+          sparse-checkout: .github/codex
+
+      - name: Fetch PR base and head refs
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+        run: |
+          git fetch --no-tags origin \
+            "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF" \
+            "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr/$PR_NUMBER"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Run review validation
+        id: validate
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "\$ python -m ruff format --check ."
+            python -m ruff format --check .
+            echo "\$ python -m ruff check ."
+            python -m ruff check .
+            echo "\$ python -m pytest"
+            python -m pytest
+          } 2>&1 | tee ../review-validation-output.log
+
+      - name: Summarize validation result
+        id: validation_summary
+        env:
+          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          if [ "$VALIDATION_OUTCOME" = "success" ]; then
+            {
+              echo "summary<<__REVIEW_EOF__"
+              echo "Validation passed: \`python -m ruff format --check .\`, \`python -m ruff check .\`, and \`python -m pytest\` all completed successfully."
+              echo "__REVIEW_EOF__"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "summary<<__REVIEW_EOF__"
+              echo "Validation failed during review context. See run logs: $RUN_URL"
+              echo
+              echo "Validation output (tail):"
+              echo
+              echo '```text'
+              tail -n 60 ../review-validation-output.log 2>/dev/null || echo "No validation output was captured."
+              echo '```'
+              echo "__REVIEW_EOF__"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write Codex review context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          VALIDATION_SUMMARY: ${{ steps.validation_summary.outputs.summary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="$(git rev-parse "refs/remotes/origin/$BASE_REF")"
+          HEAD_SHA="$(git rev-parse "refs/remotes/origin/pr/$PR_NUMBER")"
+
+          {
+            echo "# PR Review Context"
+            echo
+            echo "## Pull request"
+            echo
+            gh pr view "$PR_NUMBER" -R "$GITHUB_REPOSITORY" \
+              --json number,title,author,url \
+              --template '- PR #{{.number}}: {{.title}} (by @{{.author.login}}){{"\n"}}- URL: {{.url}}{{"\n"}}'
+            echo "- Base branch: $BASE_REF ($BASE_SHA)"
+            echo "- Head ref: refs/pull/$PR_NUMBER/head ($HEAD_SHA)"
+            echo
+            echo "## PR description"
+            echo
+            gh pr view "$PR_NUMBER" -R "$GITHUB_REPOSITORY" --json body --jq '.body // "_No description provided._"'
+            echo
+            echo "## Changed files (base...head)"
+            echo
+            echo '```text'
+            git diff --stat "$BASE_SHA...$HEAD_SHA"
+            echo '```'
+            echo
+            echo "## Validation"
+            echo
+            echo "${VALIDATION_SUMMARY:-Validation result was unavailable.}"
+          } > codex-review-context.md
+
+      - name: Run Codex review
+        id: run_codex
+        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ vars.CODEX_MODEL || 'gpt-5.5' }}
+          effort: ${{ vars.CODEX_EFFORT || 'medium' }}
+          prompt-file: trusted-base/.github/codex/prompts/pr-review.md
+          sandbox: read-only
+          codex-home: trusted-base/.github/codex/home
+          output-file: codex-pr-review.md
+
+      - name: Post review notes as PR comment
+        id: post_review_comment
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REVIEW_BODY: ${{ steps.run_codex.outputs.final-message }}
+          VALIDATION_SUMMARY: ${{ steps.validation_summary.outputs.summary }}
+        with:
+          script: |
+            const body = [
+              "## Agent PR review",
+              "",
+              "## Validation",
+              "",
+              process.env.VALIDATION_SUMMARY || "_Validation result was unavailable._",
+              "",
+              process.env.REVIEW_BODY || "_The automated review returned no additional findings._",
+              "",
+              "---",
+              "_This is an automated review. Please treat it as advisory; human review is still required._"
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body
+            });
+
+      - name: Comment when PR review workflow failed
+        if: ${{ always() && failure() && steps.pr.outputs.number != '' }}
+        continue-on-error: true
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+          CODEX_OUTCOME: ${{ steps.run_codex.outcome }}
+          REVIEW_COMMENT_OUTCOME: ${{ steps.post_review_comment.outcome }}
+          VALIDATION_SUMMARY: ${{ steps.validation_summary.outputs.summary }}
+        with:
+          script: |
+            const outcomes = [
+              ["validation", process.env.VALIDATION_OUTCOME],
+              ["Codex review", process.env.CODEX_OUTCOME],
+              ["review comment", process.env.REVIEW_COMMENT_OUTCOME],
+            ].filter(([, outcome]) => outcome && outcome !== "");
+
+            const body = [
+              "## Agent PR review failed",
+              "",
+              "The automated review workflow failed before it could complete the normal review comment.",
+              "",
+              `Run: ${process.env.RUN_URL}`,
+              "",
+              "### Step outcomes",
+              "",
+              ...outcomes.map(([name, outcome]) => `- ${name}: ${outcome}`),
+              "",
+              "## Validation",
+              "",
+              process.env.VALIDATION_SUMMARY || "_Validation result was unavailable._",
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body,
+            });
