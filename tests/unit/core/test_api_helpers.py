@@ -144,7 +144,7 @@ def test_normalize_model_catalog_preserves_openrouter_metadata() -> None:
 				"control_type": "effort",
 				"supports_effort": True,
 				"effort_choices": ["none", "minimal", "low", "medium", "high", "xhigh"],
-				"default_effort": "medium",
+				"default_effort": "none",
 				"supports_max_tokens": True,
 				"default_max_tokens": 2048,
 				"max_reasoning_tokens": 7372,
@@ -180,6 +180,7 @@ def test_reasoning_capabilities_use_effort_for_generic_reasoning_support() -> No
 	assert capabilities["supported"] is True
 	assert capabilities["control_type"] == "effort"
 	assert capabilities["supports_effort"] is True
+	assert capabilities["default_effort"] == "none"
 	assert capabilities["supports_max_tokens"] is False
 
 

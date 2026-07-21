@@ -117,7 +117,7 @@ def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
 
 	default_effort = default_reasoning.get("effort")
 	if default_effort not in OPENROUTER_REASONING_EFFORT_CHOICES:
-		default_effort = "medium" if supports_effort else None
+		default_effort = "none" if supports_effort else None
 
 	default_max_tokens = _positive_int(default_reasoning.get("max_tokens"))
 	max_reasoning_tokens = (

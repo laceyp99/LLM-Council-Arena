@@ -157,7 +157,7 @@ def test_reasoning_control_updates_show_effort_for_generic_reasoning(monkeypatch
 
 	assert effort["visible"] is True
 	assert effort["choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
-	assert effort["value"] == "medium"
+	assert effort["value"] == "none"
 	assert cost_hint["visible"] is True
 	assert cost_hint["value"] == ("input $1/M; output $2/M")
 
