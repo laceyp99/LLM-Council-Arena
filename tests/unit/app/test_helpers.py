@@ -1,13 +1,44 @@
 import json
 import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 from arena import app as app_module
 
 
 def test_timestamp_slug_normalizes_valid_timestamp() -> None:
 	assert app_module._timestamp_slug("2026-05-09T10:11:12+02:00") == "20260509T081112Z"
+
+
+def test_windows_file_lock_raises_when_deadline_expires(monkeypatch) -> None:
+	locking_attempts = 0
+
+	def fail_locking(file_descriptor, mode, byte_count) -> None:
+		nonlocal locking_attempts
+		locking_attempts += 1
+		raise OSError("lock unavailable")
+
+	lock_file = SimpleNamespace(
+		name="votes.json.lock",
+		fileno=lambda: 123,
+		seek=lambda offset: None,
+	)
+	fake_msvcrt = SimpleNamespace(LK_NBLCK=1, locking=fail_locking)
+	monotonic_values = iter([10.0, 15.0])
+
+	monkeypatch.setattr(app_module.os, "name", "nt")
+	monkeypatch.setattr(app_module.time, "monotonic", lambda: next(monotonic_values))
+	monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+	try:
+		app_module._lock_file(lock_file, timeout_seconds=5.0)
+		assert False, "Expected RuntimeError when the file lock deadline expires"
+	except RuntimeError as exc:
+		assert str(exc) == "Timed out waiting for file lock: votes.json.lock"
+
+	assert locking_attempts == 1
 
 
 def test_write_and_read_json_file_roundtrip(tmp_path: Path) -> None:
