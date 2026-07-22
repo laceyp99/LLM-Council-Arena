@@ -156,10 +156,22 @@ def test_reasoning_control_updates_show_effort_for_generic_reasoning(monkeypatch
 	effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
 
 	assert effort["visible"] is True
-	assert effort["choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
+	assert effort["choices"] == [
+		"none",
+		"minimal",
+		"low",
+		"medium",
+		"high",
+		"xhigh",
+		"max",
+	]
 	assert effort["value"] == "medium"
 	assert cost_hint["visible"] is True
-	assert cost_hint["value"] == ("input $1/M; output $2/M")
+	assert cost_hint["value"] == (
+		"Arena defaults to medium because the model supports it and declares no usable effort "
+		"default. Reasoning can increase latency, billed output-token usage, and cost. "
+		"Estimated rates: input $1/M; output $2/M."
+	)
 
 
 def test_reasoning_control_updates_show_effort_dropdown_only(monkeypatch) -> None:
@@ -180,10 +192,13 @@ def test_reasoning_control_updates_show_effort_dropdown_only(monkeypatch) -> Non
 	effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
 
 	assert effort["visible"] is True
-	assert effort["choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
+	assert effort["choices"][-1] == "max"
 	assert effort["value"] == "high"
 	assert cost_hint["visible"] is True
-	assert cost_hint["value"] == "; reasoning $3/M."
+	assert cost_hint["value"] == (
+		"Uses the model-declared high effort by default. Reasoning can increase latency, billed "
+		"output-token usage, and cost. Estimated rates: reasoning $3/M."
+	)
 
 
 def test_reasoning_control_updates_hide_budget_only_models(monkeypatch) -> None:
@@ -203,7 +218,52 @@ def test_reasoning_control_updates_hide_budget_only_models(monkeypatch) -> None:
 	effort, cost_hint = app_module._reasoning_control_updates("budget/model")
 
 	assert effort["visible"] is False
-	assert cost_hint["visible"] is False
+	assert cost_hint["visible"] is True
+	assert cost_hint["value"] == (
+		"No effort selector is available, so Arena omits reasoning settings and defers to "
+		"OpenRouter/provider defaults."
+	)
+
+
+def test_reasoning_control_updates_honor_modern_mandatory_metadata(monkeypatch) -> None:
+	monkeypatch.setattr(
+		app_module,
+		"MODEL_LOOKUP",
+		{
+			"alpha/one": {
+				"reasoning": {
+					"supported_efforts": ["none", "high", "medium"],
+					"default_effort": "high",
+					"mandatory": True,
+				}
+			}
+		},
+	)
+	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
+
+	effort, hint = app_module._reasoning_control_updates("alpha/one")
+
+	assert effort["visible"] is True
+	assert effort["choices"] == ["high", "medium"]
+	assert effort["value"] == "high"
+	assert "required" in hint["value"]
+	assert "cannot be disabled" in hint["value"]
+
+
+def test_reasoning_control_updates_hide_modern_model_without_efforts(monkeypatch) -> None:
+	monkeypatch.setattr(
+		app_module,
+		"MODEL_LOOKUP",
+		{"alpha/one": {"reasoning": {"default_enabled": True}}},
+	)
+
+	effort, hint = app_module._reasoning_control_updates("alpha/one")
+
+	assert effort["visible"] is False
+	assert effort["choices"] == []
+	assert effort["value"] is None
+	assert hint["visible"] is True
+	assert "omits reasoning settings" in hint["value"]
 
 
 def test_clear_histories_clears_user_input_and_resets_outputs(monkeypatch) -> None:

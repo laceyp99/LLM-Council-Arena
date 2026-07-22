@@ -85,19 +85,10 @@ def reasoning_cost_hint(capabilities: dict[str, Any]) -> str:
 		parts.append(f"input {prompt_price}")
 	if completion_price:
 		parts.append(f"output {completion_price}")
-
-	if not parts and not internal_reasoning_price:
-		return ""
-
 	if internal_reasoning_price:
-		reasoning_note = f"; reasoning {internal_reasoning_price}"
-	else:
-		reasoning_note = ""
+		parts.append(f"reasoning {internal_reasoning_price}")
 
-	base_hint = "; ".join(parts)
-	if base_hint:
-		return f"{base_hint}{reasoning_note}"
-	return f"{reasoning_note}."
+	return "; ".join(parts)
 
 
 def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
@@ -153,13 +144,22 @@ def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
 		control_type = "effort"
 
 	default_effort = None
+	default_source = None
 	if supports_effort:
-		if default_enabled is False and "none" in effort_choices:
-			default_effort = "none"
-		elif declared_default_effort in effort_choices and declared_default_effort != "none":
-			default_effort = declared_default_effort
-		elif "medium" in effort_choices:
-			default_effort = "medium"
+		defaults_off = not mandatory and (
+			default_enabled is False or declared_default_effort == "none"
+		)
+		if defaults_off:
+			if "none" in effort_choices:
+				default_effort = "none"
+				default_source = "disabled"
+		else:
+			if declared_default_effort in effort_choices:
+				default_effort = declared_default_effort
+				default_source = "model"
+			elif "medium" in effort_choices:
+				default_effort = "medium"
+				default_source = "arena"
 
 	default_max_tokens = _positive_int(default_reasoning.get("max_tokens"))
 	max_reasoning_tokens = (
@@ -179,6 +179,7 @@ def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
 		"supports_effort": supports_effort,
 		"effort_choices": effort_choices,
 		"default_effort": default_effort,
+		"default_source": default_source,
 		"default_enabled": default_enabled,
 		"mandatory": mandatory,
 		"supports_max_tokens": supports_max_tokens,

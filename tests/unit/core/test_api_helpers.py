@@ -159,6 +159,7 @@ def test_normalize_model_catalog_preserves_openrouter_metadata() -> None:
 				"supports_effort": True,
 				"effort_choices": ["high", "medium", "low"],
 				"default_effort": "high",
+				"default_source": "model",
 				"default_enabled": True,
 				"mandatory": True,
 				"supports_max_tokens": True,
@@ -221,6 +222,7 @@ def test_reasoning_capabilities_favor_effort_controls_over_token_metadata() -> N
 		"max",
 	]
 	assert capabilities["default_effort"] == "low"
+	assert capabilities["default_source"] == "model"
 	assert capabilities["supports_max_tokens"] is True
 	assert capabilities["max_reasoning_tokens"] == 90_000
 	assert capabilities["pricing"] == {"internal_reasoning": "0.000003"}
@@ -251,6 +253,7 @@ def test_modern_reasoning_capabilities_treat_null_efforts_as_gateway_choices() -
 	assert capabilities["supports_effort"] is True
 	assert capabilities["effort_choices"][-1] == "max"
 	assert capabilities["default_effort"] == "medium"
+	assert capabilities["default_source"] == "arena"
 
 
 def test_modern_reasoning_capabilities_do_not_infer_omitted_efforts() -> None:
@@ -297,6 +300,36 @@ def test_modern_reasoning_capabilities_represent_disabled_default_when_possible(
 	)
 
 	assert capabilities["default_effort"] == "none"
+	assert capabilities["default_source"] == "disabled"
+
+
+def test_modern_reasoning_capabilities_omit_unrepresentable_disabled_default() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"reasoning": {
+				"supported_efforts": ["low", "medium", "high"],
+				"default_effort": "high",
+				"default_enabled": False,
+			}
+		}
+	)
+
+	assert capabilities["default_effort"] is None
+	assert capabilities["default_source"] is None
+
+
+def test_modern_reasoning_capabilities_preserve_none_default_when_optional() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"reasoning": {
+				"supported_efforts": ["none", "medium", "high"],
+				"default_effort": "none",
+			}
+		}
+	)
+
+	assert capabilities["default_effort"] == "none"
+	assert capabilities["default_source"] == "disabled"
 
 
 def test_modern_reasoning_capabilities_omit_default_when_no_safe_choice_exists() -> None:
@@ -311,6 +344,7 @@ def test_modern_reasoning_capabilities_omit_default_when_no_safe_choice_exists()
 
 	assert capabilities["effort_choices"] == ["low", "high"]
 	assert capabilities["default_effort"] is None
+	assert capabilities["default_source"] is None
 
 
 def test_reasoning_cost_hint_formats_prompt_completion_and_reasoning_prices() -> None:
@@ -473,6 +507,26 @@ def test_normalize_reasoning_payload_builds_effort_payloads() -> None:
 	}
 	assert normalize_reasoning_payload(model, {"effort": "none"}) == {"effort": "none"}
 	assert normalize_reasoning_payload(model, {"effort": "extreme"}) is None
+
+
+def test_normalize_reasoning_payload_rejects_hidden_and_mandatory_values() -> None:
+	hidden_model = {
+		"supported_parameters": ["reasoning"],
+		"reasoning": {"default_enabled": True},
+	}
+	mandatory_model = {
+		"reasoning": {
+			"supported_efforts": ["none", "medium", "high"],
+			"mandatory": True,
+		}
+	}
+
+	assert normalize_reasoning_payload(hidden_model, {"effort": "medium"}) is None
+	assert normalize_reasoning_payload(mandatory_model, {"effort": "none"}) is None
+	assert normalize_reasoning_payload(mandatory_model, {"effort": "high"}) == {
+		"effort": "high",
+		"exclude": False,
+	}
 
 
 def test_normalize_reasoning_payload_keeps_openrouter_effort_for_reasoning_models() -> None:

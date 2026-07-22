@@ -611,7 +611,39 @@ def _reasoning_control_config(model_id: str | None) -> dict[str, dict[str, Any]]
 	capabilities = _reasoning_capabilities_for_model_id(model_id)
 	control_type = capabilities.get("control_type")
 	interactive = _selectors_interactive()
-	cost_hint = reasoning_cost_hint(capabilities)
+	pricing_hint = reasoning_cost_hint(capabilities)
+	policy_hint = ""
+	if capabilities.get("supported"):
+		if control_type != "effort":
+			policy_hint = (
+				"No effort selector is available, so Arena omits reasoning settings and "
+				"defers to OpenRouter/provider defaults."
+			)
+		elif capabilities.get("mandatory"):
+			policy_hint = "Reasoning is required for this model and cannot be disabled."
+		elif capabilities.get("default_source") == "disabled":
+			policy_hint = "Reasoning defaults off for this model."
+		elif capabilities.get("default_source") == "model":
+			policy_hint = (
+				f"Uses the model-declared {capabilities.get('default_effort')} effort by default."
+			)
+		elif capabilities.get("default_source") == "arena":
+			policy_hint = (
+				"Arena defaults to medium because the model supports it and declares no "
+				"usable effort default."
+			)
+		elif control_type == "effort":
+			policy_hint = (
+				"No safe default effort is available, so Arena leaves the selector unset and "
+				"defers to OpenRouter/provider defaults."
+			)
+
+		if control_type == "effort":
+			policy_hint = (
+				f"{policy_hint} Reasoning can increase latency, billed output-token usage, and cost."
+			).strip()
+		if pricing_hint:
+			policy_hint = f"{policy_hint} Estimated rates: {pricing_hint}.".strip()
 
 	return {
 		"effort": {
@@ -622,8 +654,8 @@ def _reasoning_control_config(model_id: str | None) -> dict[str, dict[str, Any]]
 			"interactive": interactive,
 		},
 		"cost_hint": {
-			"value": cost_hint,
-			"visible": bool(cost_hint) and control_type != "none",
+			"value": policy_hint,
+			"visible": bool(policy_hint),
 		},
 	}
 
@@ -735,7 +767,7 @@ def _prepare_reasoning_request(model_id: str, effort: str | None) -> dict[str, A
 	model_entry = MODEL_LOOKUP.get(model_id, {})
 	reasoning_payload = normalize_reasoning_payload(model_entry, {"effort": effort})
 	reasoning_warning = None
-	if effort not in (None, "none") and reasoning_payload is None:
+	if effort is not None and reasoning_payload is None:
 		model_label = _chatbot_label(model_id) if model_id else "This model"
 		reasoning_warning = (
 			f"Reasoning effort '{effort}' was selected, but {model_label} does not "

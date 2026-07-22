@@ -552,17 +552,27 @@ async def test_stream_all_models_emits_reasoning_payload_through_openrouter_requ
 			"alpha/one": {
 				"full_label": "Alpha One",
 				"provider_key": "alpha",
-				"supported_parameters": [],
+				"supported_parameters": ["reasoning"],
+				"reasoning": {"default_enabled": True},
 			},
 			"beta/two": {
 				"full_label": "Beta Two",
 				"provider_key": "beta",
 				"supported_parameters": ["reasoning"],
+				"reasoning": {
+					"supported_efforts": ["none", "medium", "high"],
+					"default_enabled": False,
+				},
 			},
 			"gamma/three": {
 				"full_label": "Gamma Three",
 				"provider_key": "gamma",
 				"supported_parameters": ["reasoning"],
+				"reasoning": {
+					"supported_efforts": ["none", "high", "medium"],
+					"default_effort": "high",
+					"mandatory": True,
+				},
 			},
 		},
 	)

@@ -27,21 +27,30 @@ It is built around OpenRouter for live model generation, but it can still start 
 ## Reasoning controls
 
 Reasoning controls are shown independently for each selected model and are driven by
-OpenRouter model metadata. If the selected model does not report supported reasoning
-parameters, the app hides the reasoning controls for that panel.
+OpenRouter model metadata. The app uses the model's declared effort list as authoritative:
+an explicit `null` list means all OpenRouter effort values are accepted, while an omitted
+list means the model does not expose effort selection. Older catalog records without the
+modern reasoning metadata retain a conservative compatibility path.
 
 Depending on the selected model, the selector area may show:
 
 - An effort dropdown for models that support OpenRouter reasoning effort values.
 - No reasoning control for models that do not expose effort levels.
 
-When reasoning is actively requested, the app asks OpenRouter to expose reasoning traces by
-sending `exclude: false`. Unsupported reasoning fields are omitted from the request payload
-instead of forcing unsupported parameters.
+The selected default follows model metadata first. A model-declared valid effort is preserved;
+models declared off default to `none` only when that is a supported choice. Otherwise, Arena
+uses `medium` only when the visible selector supports it. If none of those rules produces a
+valid choice, Arena leaves the selector unselected and omits the reasoning payload.
+
+Models that require reasoning never offer or send `none`. When a valid non-`none` effort is
+selected, the app sends `exclude: false` so provider-exposed reasoning traces remain available.
+Hidden controls, stale selections, and unsupported values cannot add reasoning settings to the
+request; OpenRouter/provider defaults apply instead.
 
 Where OpenRouter exposes pricing metadata, the selector shows a lightweight per-1M-token
 cost hint for input and output prices. These hints are approximate and are not a full cost
-estimate because actual reasoning token use and provider routing can vary.
+estimate because actual reasoning token use and provider routing can vary. Reasoning can improve
+response quality, but it can also increase latency, billed output-token usage, and cost.
 
 ## Installation
 
