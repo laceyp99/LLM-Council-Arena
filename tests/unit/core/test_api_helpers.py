@@ -121,6 +121,13 @@ def test_normalize_model_catalog_preserves_openrouter_metadata() -> None:
 			},
 			"supported_parameters": ["reasoning", "reasoning.max_tokens"],
 			"default_parameters": {"reasoning": {"max_tokens": 2048}},
+			"reasoning": {
+				"supported_efforts": ["high", "medium", "low"],
+				"default_effort": "high",
+				"default_enabled": True,
+				"supports_max_tokens": True,
+				"mandatory": True,
+			},
 			"top_provider": {"max_completion_tokens": 8192},
 			"pricing": {"prompt": "0.000001", "completion": "0.000002"},
 		}
@@ -137,14 +144,23 @@ def test_normalize_model_catalog_preserves_openrouter_metadata() -> None:
 			"full_label": "Alpha: Reasoner",
 			"supported_parameters": ["reasoning", "reasoning.max_tokens"],
 			"default_parameters": {"reasoning": {"max_tokens": 2048}},
+			"reasoning": {
+				"supported_efforts": ["high", "medium", "low"],
+				"default_effort": "high",
+				"default_enabled": True,
+				"supports_max_tokens": True,
+				"mandatory": True,
+			},
 			"top_provider": {"max_completion_tokens": 8192},
 			"pricing": {"prompt": "0.000001", "completion": "0.000002"},
 			"reasoning_capabilities": {
 				"supported": True,
 				"control_type": "effort",
 				"supports_effort": True,
-				"effort_choices": ["none", "minimal", "low", "medium", "high", "xhigh"],
-				"default_effort": "medium",
+				"effort_choices": ["high", "medium", "low"],
+				"default_effort": "high",
+				"default_enabled": True,
+				"mandatory": True,
 				"supports_max_tokens": True,
 				"default_max_tokens": 2048,
 				"max_reasoning_tokens": 7372,
@@ -152,6 +168,7 @@ def test_normalize_model_catalog_preserves_openrouter_metadata() -> None:
 			},
 		}
 	]
+	assert normalized[0]["reasoning"] is not models[0]["reasoning"]
 
 
 def test_reasoning_capabilities_are_hidden_without_supported_metadata() -> None:
@@ -194,11 +211,106 @@ def test_reasoning_capabilities_favor_effort_controls_over_token_metadata() -> N
 	)
 
 	assert capabilities["control_type"] == "effort"
-	assert capabilities["effort_choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
+	assert capabilities["effort_choices"] == [
+		"none",
+		"minimal",
+		"low",
+		"medium",
+		"high",
+		"xhigh",
+		"max",
+	]
 	assert capabilities["default_effort"] == "low"
 	assert capabilities["supports_max_tokens"] is True
 	assert capabilities["max_reasoning_tokens"] == 90_000
 	assert capabilities["pricing"] == {"internal_reasoning": "0.000003"}
+
+
+def test_modern_reasoning_capabilities_use_declared_efforts_and_default() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning"],
+			"reasoning": {
+				"supported_efforts": ["high", "low"],
+				"default_effort": "low",
+				"default_enabled": True,
+			},
+		}
+	)
+
+	assert capabilities["supported"] is True
+	assert capabilities["effort_choices"] == ["high", "low"]
+	assert capabilities["default_effort"] == "low"
+	assert capabilities["default_enabled"] is True
+	assert capabilities["mandatory"] is False
+
+
+def test_modern_reasoning_capabilities_treat_null_efforts_as_gateway_choices() -> None:
+	capabilities = reasoning_capabilities_for_model({"reasoning": {"supported_efforts": None}})
+
+	assert capabilities["supports_effort"] is True
+	assert capabilities["effort_choices"][-1] == "max"
+	assert capabilities["default_effort"] == "medium"
+
+
+def test_modern_reasoning_capabilities_do_not_infer_omitted_efforts() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning", "reasoning.effort"],
+			"reasoning": {"default_enabled": True, "supports_max_tokens": True},
+		}
+	)
+
+	assert capabilities["supported"] is True
+	assert capabilities["control_type"] == "none"
+	assert capabilities["supports_effort"] is False
+	assert capabilities["effort_choices"] == []
+	assert capabilities["supports_max_tokens"] is True
+
+
+def test_modern_reasoning_capabilities_remove_none_for_mandatory_models() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"reasoning": {
+				"supported_efforts": ["none", "medium", "high"],
+				"default_effort": "none",
+				"default_enabled": False,
+				"mandatory": True,
+			}
+		}
+	)
+
+	assert capabilities["mandatory"] is True
+	assert capabilities["effort_choices"] == ["medium", "high"]
+	assert capabilities["default_effort"] == "medium"
+
+
+def test_modern_reasoning_capabilities_represent_disabled_default_when_possible() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"reasoning": {
+				"supported_efforts": ["none", "low", "high"],
+				"default_effort": "high",
+				"default_enabled": False,
+			}
+		}
+	)
+
+	assert capabilities["default_effort"] == "none"
+
+
+def test_modern_reasoning_capabilities_omit_default_when_no_safe_choice_exists() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"reasoning": {
+				"supported_efforts": ["low", "high"],
+				"default_effort": "unsupported",
+			}
+		}
+	)
+
+	assert capabilities["effort_choices"] == ["low", "high"]
+	assert capabilities["default_effort"] is None
 
 
 def test_reasoning_cost_hint_formats_prompt_completion_and_reasoning_prices() -> None:

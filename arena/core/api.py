@@ -162,20 +162,26 @@ class OpenRouterAPI:
 				provider_label = provider_key.replace("-", " ").title()
 				model_label = slug.replace("-", " ").replace("_", " ").strip()
 
-			normalized.append(
-				{
-					"model_id": model_id,
-					"provider_key": provider_key,
-					"provider_label": provider_label,
-					"model_label": model_label or slug,
-					"full_label": full_name,
-					"supported_parameters": model.get("supported_parameters") or [],
-					"default_parameters": model.get("default_parameters") or {},
-					"top_provider": model.get("top_provider") or {},
-					"pricing": model.get("pricing") or {},
-					"reasoning_capabilities": reasoning_capabilities_for_model(model),
-				}
-			)
+			normalized_model = {
+				"model_id": model_id,
+				"provider_key": provider_key,
+				"provider_label": provider_label,
+				"model_label": model_label or slug,
+				"full_label": full_name,
+				"supported_parameters": model.get("supported_parameters") or [],
+				"default_parameters": model.get("default_parameters") or {},
+				"top_provider": model.get("top_provider") or {},
+				"pricing": model.get("pricing") or {},
+				"reasoning_capabilities": reasoning_capabilities_for_model(model),
+			}
+			if "reasoning" in model:
+				reasoning_metadata = model.get("reasoning")
+				normalized_model["reasoning"] = (
+					dict(reasoning_metadata)
+					if isinstance(reasoning_metadata, dict)
+					else reasoning_metadata
+				)
+			normalized.append(normalized_model)
 
 		normalized.sort(
 			key=lambda entry: (
