@@ -99,6 +99,8 @@ DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
 	panel_count=PANEL_COUNT,
 )
 GENERATION_INTERRUPTED_MESSAGE = "Generation stopped before this round could finish."
+FILE_LOCK_TIMEOUT_SECONDS = 5.0
+FILE_LOCK_RETRY_INTERVAL_SECONDS = 0.01
 demo: gr.Blocks | None = None
 LOGGER = logging.getLogger(__name__)
 
@@ -217,21 +219,26 @@ def _json_file_lock(path: Path):
 			_unlock_file(lock_file)
 
 
-def _lock_file(lock_file: Any) -> None:
+def _lock_file(lock_file: Any, timeout_seconds: float = FILE_LOCK_TIMEOUT_SECONDS) -> None:
 	if os.name == "nt":
 		import msvcrt
 
 		lock_file.seek(0)
+		deadline = time.monotonic() + timeout_seconds
 		while True:
 			try:
 				msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
 				return
-			except OSError:
-				time.sleep(0.01)
+			except OSError as exc:
+				if time.monotonic() >= deadline:
+					raise RuntimeError(
+						f"Timed out waiting for file lock: {lock_file.name}"
+					) from exc
+				time.sleep(FILE_LOCK_RETRY_INTERVAL_SECONDS)
+	else:
+		import fcntl
 
-	import fcntl
-
-	fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+		fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 
 
 def _unlock_file(lock_file: Any) -> None:
@@ -240,11 +247,10 @@ def _unlock_file(lock_file: Any) -> None:
 
 		lock_file.seek(0)
 		msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-		return
+	else:
+		import fcntl
 
-	import fcntl
-
-	fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+		fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _snapshot_file(path: Path) -> bytes | None:

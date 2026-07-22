@@ -203,6 +203,32 @@ def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp
 	assert (tmp_path / str(retry_state["session_dir"]) / "round.json").exists()
 
 
+def test_submit_vote_reports_file_lock_timeout(monkeypatch, tmp_path) -> None:
+	_stub_chatbot_updates(monkeypatch)
+	_patch_log_paths(monkeypatch, tmp_path)
+	round_state = _build_votable_round_state()
+
+	monkeypatch.setattr(
+		app_module,
+		"_lock_file",
+		lambda *args, **kwargs: (_ for _ in ()).throw(
+			RuntimeError("Timed out waiting for file lock: votes.json.lock")
+		),
+	)
+
+	outputs = app_module.submit_vote(round_state)
+	submitted_state = outputs[0]
+	status_update = outputs[9]
+
+	assert submitted_state["submitted"] is False
+	assert submitted_state["submission_status"] == "error"
+	assert submitted_state["submission_message"] == (
+		"Vote could not be saved: Timed out waiting for file lock: votes.json.lock"
+	)
+	assert "Timed out waiting for file lock" in status_update.value
+	assert not app_module.VOTES_FILE.exists()
+
+
 def test_submit_vote_rolls_back_vote_record_when_round_log_write_fails(
 	monkeypatch, tmp_path
 ) -> None:
