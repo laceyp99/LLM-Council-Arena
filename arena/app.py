@@ -58,6 +58,7 @@ from arena.state.voting import (
 )
 from arena.ui.config import (
 	APP_DIR,
+	APP_ICON_PATH,
 	DEFAULT_MODEL_IDS,
 	DEFAULT_SYSTEM_PROMPT,
 	LOGS_DIR,
@@ -1554,4 +1555,4 @@ def create_demo() -> gr.Blocks:
 if __name__ == "__main__":
 	_bootstrap_persistence()
 	initialize_model_catalog()
-	create_demo().queue().launch()
+	create_demo().queue().launch(favicon_path=APP_ICON_PATH)

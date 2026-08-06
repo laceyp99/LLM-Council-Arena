@@ -105,7 +105,8 @@ def test_main_entrypoint_launches_demo(monkeypatch) -> None:
 		launch_calls.append("initialize")
 
 	class FakeQueuedDemo:
-		def launch(self) -> None:
+		def launch(self, **kwargs: object) -> None:
+			assert kwargs["favicon_path"] == main_module.APP_ICON_PATH
 			launch_calls.append("launch")
 
 	class FakeDemo:
