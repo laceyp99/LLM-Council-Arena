@@ -69,10 +69,17 @@ def _serialize_history(history: list[Any]) -> list[dict[str, Any]]:
 	return [_serialize_message(message) for message in history]
 
 
+def _status_message(content: str, title: str) -> gr.ChatMessage:
+	return gr.ChatMessage(
+		role="assistant",
+		content=content,
+		metadata={"title": title, "status": "done"},
+	)
+
+
 def _finalize_round_state_logs(
 	round_state: dict[str, Any],
 	histories: list[list[Any]],
-	assistant_message_indices: list[int | None],
 	reasoning_message_indices: list[int | None],
 ) -> None:
 	slot_logs = round_state.get("slot_logs")
@@ -83,9 +90,6 @@ def _finalize_round_state_logs(
 		history = histories[slot]
 		slot_log = slot_logs[slot]
 		slot_log["message_history"] = _serialize_history(history)
-		assistant_index = assistant_message_indices[slot]
-		if isinstance(assistant_index, int) and 0 <= assistant_index < len(history):
-			slot_log["final_response"] = _message_text_content(history[assistant_index]).strip()
 		reasoning_index = reasoning_message_indices[slot]
 		if isinstance(reasoning_index, int) and 0 <= reasoning_index < len(history):
 			slot_log["reasoning_trace"] = _message_text_content(history[reasoning_index]).strip()

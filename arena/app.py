@@ -79,6 +79,7 @@ from arena.ui.display import (
 	_leaderboard_summary,
 	_message_text_content,
 	_stats_footer,
+	_status_message,
 	_streaming_outputs,
 	_targeted_chatbot_value_updates,
 	_upsert_assistant_message,
@@ -810,12 +811,11 @@ def _apply_stream_chunk(
 		errored_slots.add(slot)
 		round_state["slot_logs"][slot]["status"] = "error"
 		round_state["slot_logs"][slot]["error"] = str(chunk.get("error") or "Unknown error")
-		error_prefix = "\n" if assistant_message_indices[slot] is not None else ""
-		assistant_message_indices[slot] = _upsert_assistant_message(
-			history=histories[slot],
-			message_index=assistant_message_indices[slot],
-			content=f"{error_prefix}[Error] {round_state['slot_logs'][slot]['error']}",
-			append=True,
+		histories[slot].append(
+			_status_message(
+				f"[Error] {round_state['slot_logs'][slot]['error']}",
+				"Generation Error",
+			)
 		)
 		reasoning_index = reasoning_message_indices[slot]
 		if reasoning_index is not None:
@@ -944,9 +944,7 @@ def _apply_stream_chunk(
 	if not changed_history and chunk.get("event") not in {"complete", "error"}:
 		return None
 
-	_finalize_round_state_logs(
-		round_state, histories, assistant_message_indices, reasoning_message_indices
-	)
+	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 	return slot
 
 
@@ -958,9 +956,7 @@ def _finalize_generation_state(
 	completed_slots: set[int],
 	errored_slots: set[int],
 ) -> None:
-	_finalize_round_state_logs(
-		round_state, histories, assistant_message_indices, reasoning_message_indices
-	)
+	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 	round_state["completed_slots"] = sorted(completed_slots)
 	round_state["errored_slots"] = sorted(errored_slots)
 	round_state["generation_completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -1035,15 +1031,8 @@ async def stream_all_models(
 	for slot, request_metadata in enumerate(reasoning_requests):
 		reasoning_warning = request_metadata.get("reasoning_warning")
 		if isinstance(reasoning_warning, str) and reasoning_warning:
-			histories[slot].append(
-				{
-					"role": "assistant",
-					"content": f"[Warning] {reasoning_warning}",
-				}
-			)
-	_finalize_round_state_logs(
-		round_state, histories, assistant_message_indices, reasoning_message_indices
-	)
+			histories[slot].append(_status_message(f"[Warning] {reasoning_warning}", "Warning"))
+	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 
 	yield _streaming_outputs(
 		user_input="",
@@ -1159,10 +1148,10 @@ async def stream_all_models(
 			round_state["slot_logs"][slot]["status"] = "error"
 			round_state["slot_logs"][slot]["error"] = GENERATION_INTERRUPTED_MESSAGE
 			histories[slot].append(
-				{
-					"role": "assistant",
-					"content": f"[Error] {GENERATION_INTERRUPTED_MESSAGE}",
-				}
+				_status_message(
+					f"[Error] {GENERATION_INTERRUPTED_MESSAGE}",
+					"Generation Error",
+				)
 			)
 			reasoning_index = reasoning_message_indices[slot]
 			if reasoning_index is not None:

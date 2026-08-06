@@ -10,6 +10,7 @@ from arena.ui.display import (
 	_reasoning_trace_title,
 	_serialize_history,
 	_stats_footer,
+	_status_message,
 	_upsert_assistant_message,
 	_upsert_reasoning_message,
 )
@@ -54,12 +55,20 @@ def test_message_text_content_and_serialize_history_handle_supported_types() -> 
 	]
 
 
+def test_status_message_is_a_distinct_completed_chat_message() -> None:
+	message = _status_message("[Error] provider failure", "Generation Error")
+
+	assert message.role == "assistant"
+	assert message.content == "[Error] provider failure"
+	assert message.metadata == {"title": "Generation Error", "status": "done"}
+
+
 def test_finalize_round_state_logs_captures_histories_and_outputs() -> None:
 	round_state = {
 		"slot_logs": [
-			{"selection_slot": 0},
+			{"selection_slot": 0, "final_response": "Accumulated answer"},
 			{"selection_slot": 1},
-			{"selection_slot": 2},
+			{"selection_slot": 2, "final_response": "Another accumulated answer"},
 		]
 	}
 	histories = [
@@ -71,11 +80,11 @@ def test_finalize_round_state_logs_captures_histories_and_outputs() -> None:
 		[{"role": "assistant", "content": "Another answer"}],
 	]
 
-	_finalize_round_state_logs(round_state, histories, [0, None, 0], [1, None, None])
+	_finalize_round_state_logs(round_state, histories, [1, None, None])
 
-	assert round_state["slot_logs"][0]["final_response"] == "Final answer"
+	assert round_state["slot_logs"][0]["final_response"] == "Accumulated answer"
 	assert round_state["slot_logs"][0]["reasoning_trace"] == "Reasoning trail"
-	assert round_state["slot_logs"][2]["final_response"] == "Another answer"
+	assert round_state["slot_logs"][2]["final_response"] == "Another accumulated answer"
 	assert round_state["slot_logs"][1]["message_history"] == []
 
 
