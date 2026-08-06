@@ -944,9 +944,7 @@ def _apply_stream_chunk(
 	if not changed_history and chunk.get("event") not in {"complete", "error"}:
 		return None
 
-	_finalize_round_state_logs(
-		round_state, histories, assistant_message_indices, reasoning_message_indices
-	)
+	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 	return slot
 
 
@@ -958,9 +956,7 @@ def _finalize_generation_state(
 	completed_slots: set[int],
 	errored_slots: set[int],
 ) -> None:
-	_finalize_round_state_logs(
-		round_state, histories, assistant_message_indices, reasoning_message_indices
-	)
+	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 	round_state["completed_slots"] = sorted(completed_slots)
 	round_state["errored_slots"] = sorted(errored_slots)
 	round_state["generation_completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -1041,9 +1037,7 @@ async def stream_all_models(
 					"content": f"[Warning] {reasoning_warning}",
 				}
 			)
-	_finalize_round_state_logs(
-		round_state, histories, assistant_message_indices, reasoning_message_indices
-	)
+	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 
 	yield _streaming_outputs(
 		user_input="",

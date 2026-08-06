@@ -215,6 +215,15 @@ def test_apply_stream_chunk_finalizes_reasoning_on_error() -> None:
 			"usage": {"completion_tokens_details": {"reasoning_tokens": 3}},
 		},
 	)
+	app_module._apply_stream_chunk(
+		round_state,
+		histories,
+		assistant_message_indices,
+		reasoning_message_indices,
+		completed_slots,
+		errored_slots,
+		{"slot": 1, "delta": "Partial answer"},
+	)
 	slot = app_module._apply_stream_chunk(
 		round_state,
 		histories,
@@ -229,9 +238,10 @@ def test_apply_stream_chunk_finalizes_reasoning_on_error() -> None:
 	assert 1 in errored_slots
 	assert round_state["slot_logs"][1]["status"] == "error"
 	assert "provider failure" in str(round_state["slot_logs"][1]["error"])
+	assert round_state["slot_logs"][1]["final_response"] == "Partial answer"
 	assert isinstance(histories[1][1], gr.ChatMessage)
 	assert histories[1][1].metadata["status"] == "done"
-	assert histories[1][2]["content"] == "[Error] provider failure"
+	assert histories[1][2]["content"] == "Partial answer\n[Error] provider failure"
 
 
 def test_apply_stream_chunk_complete_records_usage_and_stats_footer() -> None:
