@@ -238,5 +238,8 @@ def reset_vote(round_state: dict[str, Any] | None):
 		"second_choice": None,
 		"third_choice": None,
 		"vote_stage": "pick_first",
+		"log_warning": None,
+		"submission_status": None,
+		"submission_message": None,
 	}
 	return updated_state, *_vote_ui_updates(updated_state)
