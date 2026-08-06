@@ -944,7 +944,8 @@ def _apply_stream_chunk(
 	if not changed_history and chunk.get("event") not in {"complete", "error"}:
 		return None
 
-	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
+	if chunk.get("event") in {"complete", "error"}:
+		_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 	return slot
 
 
