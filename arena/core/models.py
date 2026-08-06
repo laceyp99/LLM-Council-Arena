@@ -32,25 +32,25 @@ def _fallback_entry(
 def _fallback_model_catalog() -> list[dict[str, Any]]:
 	return [
 		_fallback_entry(
-			"openai/gpt-5.4-mini",
-			"openai",
-			"OpenAI",
-			"GPT-5.4 Mini",
-			"OpenAI: GPT-5.4 Mini",
-		),
-		_fallback_entry(
-			"anthropic/claude-sonnet-4.5",
-			"anthropic",
-			"Anthropic",
-			"Claude Sonnet 4.5",
-			"Anthropic: Claude Sonnet 4.5",
-		),
-		_fallback_entry(
-			"google/gemini-3.1-flash-lite-preview",
+			"google/gemini-3.5-flash-lite",
 			"google",
 			"Google",
-			"Gemini 3.1 Flash Lite Preview",
-			"Google: Gemini 3.1 Flash Lite Preview",
+			"Gemini 3.5 Flash Lite",
+			"Google: Gemini 3.5 Flash Lite",
+		),
+		_fallback_entry(
+			"openai/gpt-5.6-luna",
+			"openai",
+			"OpenAI",
+			"GPT-5.6 Luna",
+			"OpenAI: GPT-5.6 Luna",
+		),
+		_fallback_entry(
+			"anthropic/claude-sonnet-5",
+			"anthropic",
+			"Anthropic",
+			"Claude Sonnet 5",
+			"Anthropic: Claude Sonnet 5",
 		),
 	]
 
