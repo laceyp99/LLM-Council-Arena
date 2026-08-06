@@ -241,7 +241,10 @@ def test_apply_stream_chunk_finalizes_reasoning_on_error() -> None:
 	assert round_state["slot_logs"][1]["final_response"] == "Partial answer"
 	assert isinstance(histories[1][1], gr.ChatMessage)
 	assert histories[1][1].metadata["status"] == "done"
-	assert histories[1][2]["content"] == "Partial answer\n[Error] provider failure"
+	assert histories[1][2]["content"] == "Partial answer"
+	assert isinstance(histories[1][3], gr.ChatMessage)
+	assert histories[1][3].content == "[Error] provider failure"
+	assert histories[1][3].metadata["title"] == "Generation Error"
 
 
 def test_apply_stream_chunk_complete_records_usage_and_stats_footer() -> None:
@@ -676,6 +679,10 @@ async def test_stream_all_models_warns_when_selected_reasoning_is_unsupported(
 	assert final_round_state["slot_logs"][1]["message_history"][1]["content"].startswith(
 		"[Warning] Reasoning effort 'high' was selected"
 	)
+	assert final_round_state["slot_logs"][1]["message_history"][1]["metadata"] == {
+		"title": "Warning",
+		"status": "done",
+	}
 
 
 @pytest.mark.anyio
@@ -747,6 +754,13 @@ async def test_stream_all_models_recovers_from_background_stream_failure(monkeyp
 	assert final_round_state["errored_slots"] == [0, 1, 2]
 	assert final_round_state["slot_logs"][0]["final_response"] == "first chunk"
 	assert final_round_state["slot_logs"][0]["status"] == "error"
+	error_messages = [
+		message
+		for message in final_round_state["slot_logs"][0]["message_history"]
+		if message.get("metadata", {}).get("title") == "Generation Error"
+	]
+	assert len(error_messages) == 1
+	assert error_messages[0]["content"].startswith("[Error] Generation stopped")
 	assert (
 		final_round_state["slot_logs"][0]["error"]
 		== "Generation stopped before this round could finish."

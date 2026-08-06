@@ -69,6 +69,14 @@ def _serialize_history(history: list[Any]) -> list[dict[str, Any]]:
 	return [_serialize_message(message) for message in history]
 
 
+def _status_message(content: str, title: str) -> gr.ChatMessage:
+	return gr.ChatMessage(
+		role="assistant",
+		content=content,
+		metadata={"title": title, "status": "done"},
+	)
+
+
 def _finalize_round_state_logs(
 	round_state: dict[str, Any],
 	histories: list[list[Any]],

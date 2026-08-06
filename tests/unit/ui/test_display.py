@@ -10,6 +10,7 @@ from arena.ui.display import (
 	_reasoning_trace_title,
 	_serialize_history,
 	_stats_footer,
+	_status_message,
 	_upsert_assistant_message,
 	_upsert_reasoning_message,
 )
@@ -52,6 +53,14 @@ def test_message_text_content_and_serialize_history_handle_supported_types() -> 
 		{"role": "user", "content": "Hi", "metadata": {"source": "test"}},
 		{"role": "assistant", "content": "42"},
 	]
+
+
+def test_status_message_is_a_distinct_completed_chat_message() -> None:
+	message = _status_message("[Error] provider failure", "Generation Error")
+
+	assert message.role == "assistant"
+	assert message.content == "[Error] provider failure"
+	assert message.metadata == {"title": "Generation Error", "status": "done"}
 
 
 def test_finalize_round_state_logs_captures_histories_and_outputs() -> None:
