@@ -1,4 +1,6 @@
-# LLM Council Arena
+<div align="center">
+  <img src="app/readme-logo.png" alt="LLM Council Arena Logo" width="50%">
+</div>
 
 LLM Council Arena is a Gradio app for running the same prompt against three LLMs, showing their responses anonymously, and recording ranked votes after each round.
 
