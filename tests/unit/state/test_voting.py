@@ -71,3 +71,27 @@ def test_reset_vote_clears_rankings_for_active_round() -> None:
 	assert updated_state["second_choice"] is None
 	assert updated_state["third_choice"] is None
 	assert updated_state["vote_stage"] == "pick_first"
+
+
+def test_reset_vote_clears_failed_submission_status_banner() -> None:
+	state = {
+		"round_id": "round-1",
+		"ready_for_vote": True,
+		"submitted": False,
+		"first_choice": "Response A",
+		"second_choice": "Response B",
+		"third_choice": "Response C",
+		"vote_stage": "ready_submit",
+		"log_warning": "disk full",
+		"submission_status": "error",
+		"submission_message": "Vote could not be saved: disk full",
+	}
+
+	updated_state, *updates = reset_vote(state)
+	status_update = updates[-1]
+
+	assert updated_state["log_warning"] is None
+	assert updated_state["submission_status"] is None
+	assert updated_state["submission_message"] is None
+	assert status_update.visible is False
+	assert status_update.value == ""
