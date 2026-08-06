@@ -164,7 +164,7 @@ def _build_generation_context() -> tuple[
 	)
 
 
-def test_apply_stream_chunk_appends_delta_and_updates_slot_log() -> None:
+def test_apply_stream_chunk_appends_delta_without_finalizing_logs(monkeypatch) -> None:
 	(
 		round_state,
 		histories,
@@ -173,6 +173,14 @@ def test_apply_stream_chunk_appends_delta_and_updates_slot_log() -> None:
 		completed_slots,
 		errored_slots,
 	) = _build_generation_context()
+	finalize_calls: list[object] = []
+	original_finalize = app_module._finalize_round_state_logs
+
+	def track_finalization(*args) -> None:
+		finalize_calls.append(args)
+		original_finalize(*args)
+
+	monkeypatch.setattr(app_module, "_finalize_round_state_logs", track_finalization)
 
 	slot = app_module._apply_stream_chunk(
 		round_state,
@@ -188,7 +196,8 @@ def test_apply_stream_chunk_appends_delta_and_updates_slot_log() -> None:
 	assert round_state["slot_logs"][0]["status"] == "streaming"
 	assert round_state["slot_logs"][0]["final_response"] == "Hello world"
 	assert histories[0][1] == {"role": "assistant", "content": "Hello world"}
-	assert round_state["slot_logs"][0]["message_history"][1]["content"] == "Hello world"
+	assert finalize_calls == []
+	assert round_state["slot_logs"][0]["message_history"] == []
 
 
 def test_apply_stream_chunk_finalizes_reasoning_on_error() -> None:
@@ -288,6 +297,9 @@ def test_apply_stream_chunk_complete_records_usage_and_stats_footer() -> None:
 	assert round_state["slot_logs"][2]["completion_tokens"] == 42
 	assert round_state["slot_logs"][2]["cost"] == 0.002
 	assert round_state["slot_logs"][2]["finish_reason"] == "stop"
+	assert round_state["slot_logs"][2]["message_history"][-1]["metadata"]["title"] == (
+		"🛠️ Generation Stats"
+	)
 	assert isinstance(histories[2][-1], gr.ChatMessage)
 	assert histories[2][-1].metadata["title"] == "🛠️ Generation Stats"
 
