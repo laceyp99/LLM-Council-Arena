@@ -79,8 +79,8 @@ def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
 		{"reasoning.effort", "reasoning_effort", "effort"} & supported_parameters
 	)
 	supports_effort = supports_native_effort or _supports_openrouter_effort_levels(model)
-	# Token-budget-only models still count as reasoning models (for the cost hint),
-	# even though the UI only offers an effort control.
+	# Budget-only models ("reasoning.max_tokens") still report supported=True in the
+	# catalog metadata; the UI hides reasoning controls for them (control_type "none").
 	supports_reasoning = supports_effort or bool(
 		{"reasoning", "reasoning.max_tokens"} & supported_parameters
 	)
