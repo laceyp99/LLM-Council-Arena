@@ -128,6 +128,16 @@ def test_update_panel_model_resets_arena_outputs(monkeypatch) -> None:
 	)
 
 
+def test_ui_readiness_follows_flag_not_status_wording(monkeypatch) -> None:
+	monkeypatch.setattr(app_module, "MODEL_CATALOG_STATUS", "Warning: reworded but live")
+	monkeypatch.setattr(app_module, "MODEL_CATALOG_READY", True)
+	assert app_module._openrouter_status_banner().visible is False
+
+	monkeypatch.setattr(app_module, "MODEL_CATALOG_STATUS", "Loaded 3 text-capable models.")
+	monkeypatch.setattr(app_module, "MODEL_CATALOG_READY", False)
+	assert app_module._openrouter_status_banner().visible is True
+
+
 def test_reasoning_control_updates_hide_controls_for_unsupported_models(monkeypatch) -> None:
 	monkeypatch.setattr(app_module, "MODEL_LOOKUP", {"alpha/one": {}})
 	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)

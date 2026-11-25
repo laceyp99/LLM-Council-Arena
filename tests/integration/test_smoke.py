@@ -11,6 +11,7 @@ def _startup_selector_config(
 	*,
 	catalog_status: str,
 	api_key: str | None,
+	ready: bool,
 ) -> dict[str, object]:
 	repo_root = Path(__file__).resolve().parents[2]
 	script = textwrap.dedent(
@@ -47,6 +48,7 @@ def _startup_selector_config(
 			],
 			sys.argv[1],
 			None if sys.argv[2] == "__none__" else sys.argv[2],
+			sys.argv[3] == "ready",
 		)
 
 		app_module = importlib.import_module("arena.app")
@@ -75,6 +77,7 @@ def _startup_selector_config(
 			script,
 			catalog_status,
 			api_key if api_key is not None else "__none__",
+			"ready" if ready else "not-ready",
 		],
 		cwd=repo_root,
 		capture_output=True,
@@ -127,6 +130,7 @@ def test_startup_keeps_model_selectors_active_when_live_catalog_loads() -> None:
 	selector_config = _startup_selector_config(
 		catalog_status="Loaded 3 text-capable models from OpenRouter.",
 		api_key="test-api-key",
+		ready=True,
 	)
 
 	assert "loaded 3 text-capable models" in str(selector_config["status"]).lower()
@@ -144,6 +148,7 @@ def test_startup_disables_model_selectors_when_api_key_validation_fails() -> Non
 			"Using the fallback model list."
 		),
 		api_key="test-api-key",
+		ready=False,
 	)
 
 	assert "warning" in str(selector_config["status"]).lower()
