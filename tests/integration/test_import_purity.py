@@ -36,7 +36,7 @@ def test_importing_arena_app_does_not_create_persistence_files(tmp_path: Path) -
 		config_module.SESSION_LOGS_DIR = config_module.LOGS_DIR / "sessions"
 		config_module.SITE_NAME = "LLM Council Arena"
 		config_module.SITE_URL = "http://localhost:7860"
-		config_module.VOTES_FILE = temp_root / "votes.json"
+		config_module.VOTES_FILE = temp_root / "votes.jsonl"
 		sys.modules["arena.ui.config"] = config_module
 
 		app_module = importlib.import_module("arena.app")

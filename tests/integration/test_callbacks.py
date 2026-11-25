@@ -8,7 +8,7 @@ def _patch_log_paths(monkeypatch, tmp_path) -> None:
 	monkeypatch.setattr(app_module, "LOGS_DIR", logs_dir)
 	monkeypatch.setattr(app_module, "SESSION_LOGS_DIR", session_logs_dir)
 	monkeypatch.setattr(app_module, "META_LOG_FILE", logs_dir / "meta.json")
-	monkeypatch.setattr(app_module, "VOTES_FILE", tmp_path / "votes.json")
+	monkeypatch.setattr(app_module, "VOTES_FILE", tmp_path / "votes.jsonl")
 
 
 def _build_completed_round_state(
@@ -273,8 +273,8 @@ def test_leaderboard_view_data_aggregates_multiple_rounds(monkeypatch, tmp_path)
 		display_order=[0, 1, 2],
 	)
 
-	app_module._update_meta_log(round_state_one, "arena_logs/sessions/round-1")
-	app_module._update_meta_log(round_state_two, "arena_logs/sessions/round-2")
+	app_module._update_meta_log(round_state_one)
+	app_module._update_meta_log(round_state_two)
 
 	summary, rows = app_module._leaderboard_view_data()
 	meta_log = app_module._read_json_file(app_module.META_LOG_FILE, dict, {})
@@ -289,4 +289,3 @@ def test_leaderboard_view_data_aggregates_multiple_rounds(monkeypatch, tmp_path)
 		[3, "Label for beta/two", "beta", 0, 2, "0%"],
 	]
 	assert meta_log["total_rounds"] == 2
-	assert len(meta_log["round_summaries"]) == 2

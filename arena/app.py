@@ -156,17 +156,23 @@ def _timestamp_slug(iso_timestamp: str | None) -> str:
 	return parsed_timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+META_LOG_SCHEMA_VERSION = 2
+
+
 def _empty_meta_log() -> dict[str, Any]:
 	return {
-		"schema_version": 1,
+		"schema_version": META_LOG_SCHEMA_VERSION,
 		"updated_at": None,
 		"total_rounds": 0,
 		"model_totals": {},
-		"round_summaries": [],
 	}
 
 
 def _write_json_file(path: Path, payload: Any) -> None:
+	_write_text_file(path, f"{json.dumps(payload, indent=2)}\n")
+
+
+def _write_text_file(path: Path, text: str) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 	temporary_path: Path | None = None
 
@@ -180,7 +186,7 @@ def _write_json_file(path: Path, payload: Any) -> None:
 			suffix=".tmp",
 		) as temporary_file:
 			temporary_path = Path(temporary_file.name)
-			temporary_file.write(f"{json.dumps(payload, indent=2)}\n")
+			temporary_file.write(text)
 			temporary_file.flush()
 			os.fsync(temporary_file.fileno())
 
@@ -272,6 +278,23 @@ def _restore_file(path: Path, snapshot: bytes | None) -> None:
 	path.write_bytes(snapshot)
 
 
+def _file_size(path: Path) -> int | None:
+	if not path.exists():
+		return None
+	return path.stat().st_size
+
+
+def _truncate_file(path: Path, size: int | None) -> None:
+	if size is None:
+		path.unlink(missing_ok=True)
+		return
+
+	with path.open("r+b") as file:
+		file.truncate(size)
+		file.flush()
+		os.fsync(file.fileno())
+
+
 def _read_json_file(path: Path, expected_type: type[Any], missing_default: Any) -> Any:
 	if not path.exists():
 		return missing_default
@@ -293,10 +316,14 @@ def _ensure_votes_file() -> None:
 
 
 def _ensure_votes_file_unlocked() -> None:
-	if VOTES_FILE.exists():
+	# Appends create votes.jsonl on demand; this only migrates a legacy votes.json
+	# list once. The legacy file is left in place.
+	legacy_votes_file = VOTES_FILE.with_suffix(".json")
+	if VOTES_FILE.exists() or not legacy_votes_file.exists():
 		return
 
-	_write_json_file(VOTES_FILE, [])
+	legacy_records = _read_json_file(legacy_votes_file, list, [])
+	_write_text_file(VOTES_FILE, "".join(f"{json.dumps(record)}\n" for record in legacy_records))
 
 
 def _ensure_log_store() -> None:
@@ -324,20 +351,10 @@ def _append_vote_record(record: dict[str, Any]) -> None:
 def _append_vote_record_unlocked(record: dict[str, Any]) -> None:
 	_ensure_votes_file_unlocked()
 
-	existing_records = _read_json_file(VOTES_FILE, list, [])
-
-	existing_records.append(record)
-	_write_json_file(VOTES_FILE, existing_records)
-
-
-def _remove_vote_record_unlocked(round_id: str) -> None:
-	existing_records = _read_json_file(VOTES_FILE, list, [])
-	remaining_records = [
-		record
-		for record in existing_records
-		if not isinstance(record, dict) or record.get("round_id") != round_id
-	]
-	_write_json_file(VOTES_FILE, remaining_records)
+	with VOTES_FILE.open("a", encoding="utf-8") as votes_file:
+		votes_file.write(f"{json.dumps(record)}\n")
+		votes_file.flush()
+		os.fsync(votes_file.fileno())
 
 
 def _build_vote_record(
@@ -429,14 +446,17 @@ def _build_generation_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
-def _update_meta_log(round_state: dict[str, Any], session_dir: str) -> None:
+def _update_meta_log(round_state: dict[str, Any]) -> None:
 	with _json_file_lock(META_LOG_FILE):
-		_update_meta_log_unlocked(round_state, session_dir)
+		_update_meta_log_unlocked(round_state)
 
 
-def _update_meta_log_unlocked(round_state: dict[str, Any], session_dir: str) -> None:
+def _update_meta_log_unlocked(round_state: dict[str, Any]) -> None:
 	_ensure_log_store_unlocked()
 	meta_log = _read_json_file(META_LOG_FILE, dict, _empty_meta_log())
+	# Schema 1 kept per-round summaries that duplicate the session logs; drop them.
+	meta_log.pop("round_summaries", None)
+	meta_log["schema_version"] = META_LOG_SCHEMA_VERSION
 	model_totals = meta_log.setdefault("model_totals", {})
 
 	for slot_log in _slot_logs_from_state(round_state):
@@ -491,25 +511,6 @@ def _update_meta_log_unlocked(round_state: dict[str, Any], session_dir: str) -> 
 
 	meta_log["updated_at"] = datetime.now(timezone.utc).isoformat()
 	meta_log["total_rounds"] = int(meta_log.get("total_rounds") or 0) + 1
-	meta_log.setdefault("round_summaries", []).append(
-		{
-			"round_id": round_state.get("round_id"),
-			"created_at": round_state.get("created_at"),
-			"submitted_at": round_state.get("submitted_at"),
-			"prompt_sha256": round_state.get("prompt_sha256") or "",
-			"session_dir": session_dir,
-			"selected_models": [
-				{
-					"selection_slot": slot_log.get("selection_slot"),
-					"model_id": slot_log.get("model_id") or "",
-					"model_label": slot_log.get("model_label") or "",
-				}
-				for slot_log in _slot_logs_from_state(round_state)
-			],
-			"ranking": _ranking_details_from_state(round_state),
-			"errored_slots": round_state.get("errored_slots") or [],
-		},
-	)
 
 	_write_json_file(META_LOG_FILE, meta_log)
 
@@ -555,23 +556,20 @@ def _persist_vote_submission(round_state: dict[str, Any]) -> str:
 	session_dir, session_dir_relative = _round_session_log_path(round_state)
 
 	with _json_file_lock(VOTES_FILE), _json_file_lock(META_LOG_FILE):
-		votes_snapshot = _snapshot_file(VOTES_FILE)
+		# Votes are append-only, so rolling back means truncating to the old size.
+		votes_size = _file_size(VOTES_FILE)
 		meta_snapshot = _snapshot_file(META_LOG_FILE)
 
 		try:
 			_append_vote_record_unlocked(_build_vote_record(round_state, session_dir_relative))
 			_write_round_session_artifacts(round_state, session_dir)
-			_update_meta_log_unlocked(round_state, session_dir_relative)
+			_update_meta_log_unlocked(round_state)
 		except Exception:
 			shutil.rmtree(session_dir, ignore_errors=True)
 			try:
 				_restore_file(META_LOG_FILE, meta_snapshot)
-				_restore_file(VOTES_FILE, votes_snapshot)
-			except Exception:
-				round_id = round_state.get("round_id")
-				if round_id:
-					_remove_vote_record_unlocked(str(round_id))
-				raise
+			finally:
+				_truncate_file(VOTES_FILE, votes_size)
 			raise
 
 	return session_dir_relative

@@ -126,7 +126,7 @@ def test_build_generation_payload_includes_generation_stats_and_usage() -> None:
 	}
 
 
-def test_update_meta_log_aggregates_model_totals_and_round_summary(monkeypatch, tmp_path) -> None:
+def test_update_meta_log_aggregates_model_totals(monkeypatch, tmp_path) -> None:
 	meta_log_file = tmp_path / "meta.json"
 	logs_dir = tmp_path / "arena_logs"
 	session_logs_dir = logs_dir / "sessions"
@@ -136,14 +136,39 @@ def test_update_meta_log_aggregates_model_totals_and_round_summary(monkeypatch, 
 	monkeypatch.setattr(app_module, "SESSION_LOGS_DIR", session_logs_dir)
 
 	round_state = _sample_round_state()
-	app_module._update_meta_log(round_state, "arena_logs/sessions/round-1")
+	app_module._update_meta_log(round_state)
 
 	meta_log = app_module._read_json_file(meta_log_file, dict, {})
 
 	assert meta_log["total_rounds"] == 1
 	assert meta_log["model_totals"]["gamma/three"]["wins"] == 1
 	assert meta_log["model_totals"]["beta/two"]["error_count"] == 1
-	assert meta_log["round_summaries"][0]["session_dir"] == "arena_logs/sessions/round-1"
+
+
+def test_update_meta_log_drops_legacy_round_summaries_and_keeps_totals(
+	monkeypatch, tmp_path
+) -> None:
+	meta_log_file = tmp_path / "meta.json"
+	logs_dir = tmp_path / "arena_logs"
+
+	monkeypatch.setattr(app_module, "META_LOG_FILE", meta_log_file)
+	monkeypatch.setattr(app_module, "LOGS_DIR", logs_dir)
+	monkeypatch.setattr(app_module, "SESSION_LOGS_DIR", logs_dir / "sessions")
+
+	app_module._update_meta_log(_sample_round_state())
+	legacy_meta_log = app_module._read_json_file(meta_log_file, dict, {})
+	legacy_meta_log["schema_version"] = 1
+	legacy_meta_log["round_summaries"] = [{"round_id": "round-1"}]
+	app_module._write_json_file(meta_log_file, legacy_meta_log)
+
+	app_module._update_meta_log({**_sample_round_state(), "round_id": "round-2"})
+	meta_log = app_module._read_json_file(meta_log_file, dict, {})
+
+	assert "round_summaries" not in meta_log
+	assert meta_log["schema_version"] == 2
+	assert meta_log["total_rounds"] == 2
+	assert meta_log["model_totals"]["gamma/three"]["wins"] == 2
+	assert meta_log["model_totals"]["alpha/one"]["total_completion_tokens"] == 22
 
 
 def test_update_meta_log_preserves_concurrent_aggregates(monkeypatch, tmp_path) -> None:
@@ -160,7 +185,7 @@ def test_update_meta_log_preserves_concurrent_aggregates(monkeypatch, tmp_path) 
 			**_sample_round_state(),
 			"round_id": f"round-{index}",
 		}
-		app_module._update_meta_log(round_state, f"arena_logs/sessions/round-{index}")
+		app_module._update_meta_log(round_state)
 
 	with ThreadPoolExecutor(max_workers=8) as executor:
 		list(executor.map(update_meta, range(30)))
@@ -168,7 +193,6 @@ def test_update_meta_log_preserves_concurrent_aggregates(monkeypatch, tmp_path) 
 	meta_log = app_module._read_json_file(meta_log_file, dict, {})
 
 	assert meta_log["total_rounds"] == 30
-	assert len(meta_log["round_summaries"]) == 30
 	assert meta_log["model_totals"]["alpha/one"]["appearances"] == 30
 	assert meta_log["model_totals"]["beta/two"]["error_count"] == 30
 	assert meta_log["model_totals"]["gamma/three"]["wins"] == 30

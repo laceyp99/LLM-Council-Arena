@@ -8,6 +8,10 @@ from types import SimpleNamespace
 from arena import app as app_module
 
 
+def _read_jsonl(path: Path) -> list[dict[str, object]]:
+	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
 def test_timestamp_slug_normalizes_valid_timestamp() -> None:
 	assert app_module._timestamp_slug("2026-05-09T10:11:12+02:00") == "20260509T081112Z"
 
@@ -21,7 +25,7 @@ def test_windows_file_lock_raises_when_deadline_expires(monkeypatch) -> None:
 		raise OSError("lock unavailable")
 
 	lock_file = SimpleNamespace(
-		name="votes.json.lock",
+		name="votes.jsonl.lock",
 		fileno=lambda: 123,
 		seek=lambda offset: None,
 	)
@@ -36,7 +40,7 @@ def test_windows_file_lock_raises_when_deadline_expires(monkeypatch) -> None:
 		app_module._lock_file(lock_file, timeout_seconds=5.0)
 		assert False, "Expected RuntimeError when the file lock deadline expires"
 	except RuntimeError as exc:
-		assert str(exc) == "Timed out waiting for file lock: votes.json.lock"
+		assert str(exc) == "Timed out waiting for file lock: votes.jsonl.lock"
 
 	assert locking_attempts == 1
 
@@ -150,7 +154,7 @@ def test_ensure_log_store_and_append_vote_record_use_configured_paths(
 	logs_dir = tmp_path / "arena_logs"
 	session_logs_dir = logs_dir / "sessions"
 	meta_log_file = logs_dir / "meta.json"
-	votes_file = tmp_path / "votes.json"
+	votes_file = tmp_path / "votes.jsonl"
 
 	assert not logs_dir.exists()
 	assert not session_logs_dir.exists()
@@ -166,12 +170,12 @@ def test_ensure_log_store_and_append_vote_record_use_configured_paths(
 	app_module._append_vote_record({"round_id": "round-1"})
 
 	assert session_logs_dir.exists()
-	assert app_module._read_json_file(meta_log_file, dict, {})["schema_version"] == 1
-	assert app_module._read_json_file(votes_file, list, []) == [{"round_id": "round-1"}]
+	assert app_module._read_json_file(meta_log_file, dict, {})["schema_version"] == 2
+	assert _read_jsonl(votes_file) == [{"round_id": "round-1"}]
 
 
 def test_append_vote_record_preserves_concurrent_records(monkeypatch, tmp_path: Path) -> None:
-	votes_file = tmp_path / "votes.json"
+	votes_file = tmp_path / "votes.jsonl"
 	monkeypatch.setattr(app_module, "VOTES_FILE", votes_file)
 
 	def append_record(index: int) -> None:
@@ -180,11 +184,51 @@ def test_append_vote_record_preserves_concurrent_records(monkeypatch, tmp_path: 
 	with ThreadPoolExecutor(max_workers=8) as executor:
 		list(executor.map(append_record, range(40)))
 
-	votes = app_module._read_json_file(votes_file, list, [])
+	votes = _read_jsonl(votes_file)
 	round_ids = {record["round_id"] for record in votes}
 
 	assert len(votes) == 40
 	assert round_ids == {f"round-{index}" for index in range(40)}
+
+
+def test_bootstrap_migrates_legacy_votes_json_once(monkeypatch, tmp_path: Path) -> None:
+	logs_dir = tmp_path / "arena_logs"
+	votes_file = tmp_path / "votes.jsonl"
+	legacy_votes_file = tmp_path / "votes.json"
+	legacy_records = [{"round_id": "legacy-1"}, {"round_id": "legacy-2"}]
+	legacy_votes_file.write_text(json.dumps(legacy_records, indent=2), encoding="utf-8")
+	legacy_bytes = legacy_votes_file.read_bytes()
+
+	monkeypatch.setattr(app_module, "LOGS_DIR", logs_dir)
+	monkeypatch.setattr(app_module, "SESSION_LOGS_DIR", logs_dir / "sessions")
+	monkeypatch.setattr(app_module, "META_LOG_FILE", logs_dir / "meta.json")
+	monkeypatch.setattr(app_module, "VOTES_FILE", votes_file)
+
+	app_module._bootstrap_persistence()
+	app_module._append_vote_record({"round_id": "new-1"})
+	app_module._bootstrap_persistence()
+
+	assert _read_jsonl(votes_file) == [*legacy_records, {"round_id": "new-1"}]
+	assert legacy_votes_file.read_bytes() == legacy_bytes
+
+
+def test_bootstrap_rejects_invalid_legacy_votes_json(monkeypatch, tmp_path: Path) -> None:
+	logs_dir = tmp_path / "arena_logs"
+	votes_file = tmp_path / "votes.jsonl"
+	(tmp_path / "votes.json").write_text("[{not valid json", encoding="utf-8")
+
+	monkeypatch.setattr(app_module, "LOGS_DIR", logs_dir)
+	monkeypatch.setattr(app_module, "SESSION_LOGS_DIR", logs_dir / "sessions")
+	monkeypatch.setattr(app_module, "META_LOG_FILE", logs_dir / "meta.json")
+	monkeypatch.setattr(app_module, "VOTES_FILE", votes_file)
+
+	try:
+		app_module._bootstrap_persistence()
+		assert False, "Expected RuntimeError for an invalid legacy votes file"
+	except RuntimeError as exc:
+		assert "votes.json is not valid JSON" in str(exc)
+
+	assert not votes_file.exists()
 
 
 def test_build_vote_record_uses_round_state_mapping_and_rankings() -> None:

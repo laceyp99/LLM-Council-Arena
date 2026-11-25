@@ -11,7 +11,7 @@ DEFAULT_MODEL_IDS = [
 ]
 APP_DIR = Path(__file__).resolve().parents[2]
 APP_ICON_PATH = APP_DIR / "app" / "icon.png"
-VOTES_FILE = APP_DIR / "votes.json"
+VOTES_FILE = APP_DIR / "votes.jsonl"
 LOGS_DIR = APP_DIR / "arena_logs"
 SESSION_LOGS_DIR = LOGS_DIR / "sessions"
 META_LOG_FILE = LOGS_DIR / "meta.json"
