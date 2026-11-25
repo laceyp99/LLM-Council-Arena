@@ -227,6 +227,17 @@ def test_reasoning_cost_hint_uses_output_note_without_internal_reasoning_price()
 	assert reasoning_cost_hint(capabilities) == ("input $0.5/M; output $1.5/M")
 
 
+def test_reasoning_cost_hint_with_only_internal_reasoning_price() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning"],
+			"pricing": {"internal_reasoning": "0.000001"},
+		}
+	)
+
+	assert reasoning_cost_hint(capabilities) == "reasoning $1/M"
+
+
 def test_reasoning_cost_hint_hides_without_supported_reasoning_or_pricing() -> None:
 	assert (
 		reasoning_cost_hint(

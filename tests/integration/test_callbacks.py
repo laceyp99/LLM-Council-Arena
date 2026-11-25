@@ -183,7 +183,7 @@ def test_reasoning_control_updates_show_effort_dropdown_only(monkeypatch) -> Non
 	assert effort["choices"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
 	assert effort["value"] == "high"
 	assert cost_hint["visible"] is True
-	assert cost_hint["value"] == "; reasoning $3/M."
+	assert cost_hint["value"] == "reasoning $3/M"
 
 
 def test_reasoning_control_updates_hide_budget_only_models(monkeypatch) -> None:

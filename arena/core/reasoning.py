@@ -56,10 +56,11 @@ def _price_per_million_tokens(value: Any) -> str | None:
 	except (InvalidOperation, ValueError):
 		return None
 
+	# normalize() already drops trailing zeros, so 0.50 renders as 0.5.
 	normalized = price.normalize()
 	if normalized == normalized.to_integral():
 		return f"${normalized:.0f}/M"
-	return f"${normalized:f}/M".rstrip("0").rstrip(".")
+	return f"${normalized:f}/M"
 
 
 def reasoning_cost_hint(capabilities: dict[str, Any]) -> str:
@@ -68,28 +69,16 @@ def reasoning_cost_hint(capabilities: dict[str, Any]) -> str:
 		return ""
 
 	pricing = _as_dict(capabilities.get("pricing"))
-	prompt_price = _price_per_million_tokens(pricing.get("prompt"))
-	completion_price = _price_per_million_tokens(pricing.get("completion"))
-	internal_reasoning_price = _price_per_million_tokens(pricing.get("internal_reasoning"))
-
 	parts = []
-	if prompt_price:
-		parts.append(f"input {prompt_price}")
-	if completion_price:
-		parts.append(f"output {completion_price}")
-
-	if not parts and not internal_reasoning_price:
-		return ""
-
-	if internal_reasoning_price:
-		reasoning_note = f"; reasoning {internal_reasoning_price}"
-	else:
-		reasoning_note = ""
-
-	base_hint = "; ".join(parts)
-	if base_hint:
-		return f"{base_hint}{reasoning_note}"
-	return f"{reasoning_note}."
+	for label, key in (
+		("input", "prompt"),
+		("output", "completion"),
+		("reasoning", "internal_reasoning"),
+	):
+		price = _price_per_million_tokens(pricing.get(key))
+		if price:
+			parts.append(f"{label} {price}")
+	return "; ".join(parts)
 
 
 def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
