@@ -213,6 +213,7 @@ async def test_prompt_model_reports_http_error_body() -> None:
 			"slot": 2,
 			"model": "beta/two",
 			"error": "HTTP 402 Payment Required: Insufficient credits",
+			"response": {"error": {"code": 402, "message": "Insufficient credits"}},
 		}
 	]
 

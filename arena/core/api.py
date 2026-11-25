@@ -109,16 +109,18 @@ def _error_chunk(
 	return chunk
 
 
-def _http_error_message(response: httpx.Response) -> str:
-	"""Prefer OpenRouter's JSON error message over the bare HTTP status line."""
+def _http_error_chunk(slot: Any, model: str, response: httpx.Response) -> dict[str, Any]:
+	"""Report an HTTP failure with OpenRouter's JSON error message and body when present."""
 	status_line = f"HTTP {response.status_code} {response.reason_phrase}".rstrip()
 	try:
 		body = response.json()
 	except ValueError:
-		return status_line
+		return _error_chunk(slot, model, status_line)
 	error = body.get("error") if isinstance(body, dict) else None
 	message = error.get("message") if isinstance(error, dict) else None
-	return f"{status_line}: {message}" if message else status_line
+	return _error_chunk(
+		slot, model, f"{status_line}: {message}" if message else status_line, response=body
+	)
 
 
 class OpenRouterAPI:
@@ -299,7 +301,7 @@ class OpenRouterAPI:
 			if response.is_error:
 				# Read the body so the error explains why (e.g. "Insufficient credits").
 				await response.aread()
-				yield _error_chunk(slot, model, _http_error_message(response))
+				yield _http_error_chunk(slot, model, response)
 				return
 
 			async for line in response.aiter_lines():
