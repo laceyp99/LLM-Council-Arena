@@ -191,6 +191,20 @@ def test_append_vote_record_preserves_concurrent_records(monkeypatch, tmp_path: 
 	assert round_ids == {f"round-{index}" for index in range(40)}
 
 
+def test_append_vote_record_starts_new_line_after_partial_record(
+	monkeypatch, tmp_path: Path
+) -> None:
+	votes_file = tmp_path / "votes.jsonl"
+	votes_file.write_bytes(b'{"round_id": "round-1"}\n{"round_id": "rou')
+	monkeypatch.setattr(app_module, "VOTES_FILE", votes_file)
+
+	app_module._append_vote_record({"round_id": "round-2"})
+
+	lines = votes_file.read_text(encoding="utf-8").splitlines()
+	assert lines[1] == '{"round_id": "rou'
+	assert json.loads(lines[2]) == {"round_id": "round-2"}
+
+
 def test_bootstrap_migrates_legacy_votes_json_once(monkeypatch, tmp_path: Path) -> None:
 	logs_dir = tmp_path / "arena_logs"
 	votes_file = tmp_path / "votes.jsonl"

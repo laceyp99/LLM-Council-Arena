@@ -350,11 +350,28 @@ def _append_vote_record(record: dict[str, Any]) -> None:
 
 def _append_vote_record_unlocked(record: dict[str, Any]) -> None:
 	_ensure_votes_file_unlocked()
+	if not VOTES_FILE.exists():
+		# Create through the atomic write path so the new directory entry is synced too.
+		_write_text_file(VOTES_FILE, "")
+
+	line = f"{json.dumps(record)}\n"
+	if _ends_mid_line(VOTES_FILE):
+		# A crash during an earlier append can leave a partial last line; start a
+		# new line so this record is not glued onto it.
+		line = f"\n{line}"
 
 	with VOTES_FILE.open("a", encoding="utf-8") as votes_file:
-		votes_file.write(f"{json.dumps(record)}\n")
+		votes_file.write(line)
 		votes_file.flush()
 		os.fsync(votes_file.fileno())
+
+
+def _ends_mid_line(path: Path) -> bool:
+	with path.open("rb") as file:
+		if file.seek(0, os.SEEK_END) == 0:
+			return False
+		file.seek(-1, os.SEEK_END)
+		return file.read(1) != b"\n"
 
 
 def _build_vote_record(
