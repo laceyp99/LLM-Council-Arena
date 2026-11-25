@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, NamedTuple
 
 from dotenv import load_dotenv
 
@@ -55,17 +55,24 @@ def _fallback_model_catalog() -> list[dict[str, Any]]:
 	]
 
 
-def _load_model_catalog(
-	site_url: str, site_name: str
-) -> tuple[list[dict[str, Any]], str, str | None]:
+class CatalogLoad(NamedTuple):
+	catalog: list[dict[str, Any]]
+	status: str
+	api_key: str | None
+	# True only when the live OpenRouter catalog loaded; gates the Arena UI.
+	ready: bool
+
+
+def _load_model_catalog(site_url: str, site_name: str) -> CatalogLoad:
 	load_dotenv()
 	api_key = os.getenv("OPENROUTER_API_KEY")
 
 	if not api_key:
-		return (
+		return CatalogLoad(
 			_fallback_model_catalog(),
 			"Warning: OPENROUTER_API_KEY is missing. Using the fallback model list until an API key is configured.",
 			api_key,
+			ready=False,
 		)
 
 	api = OpenRouterAPI(api_key=api_key, site_url=site_url, site_name=site_name)
@@ -73,22 +80,29 @@ def _load_model_catalog(
 	try:
 		api.get_key_info()
 	except Exception as exc:
-		return (
+		return CatalogLoad(
 			_fallback_model_catalog(),
 			f"Warning: could not validate OPENROUTER_API_KEY ({exc}). Using the fallback model list.",
 			api_key,
+			ready=False,
 		)
 
 	try:
 		catalog = api.get_normalized_text_models()
 		if not catalog:
 			raise RuntimeError("OpenRouter returned no text-capable models.")
-		return catalog, f"Loaded {len(catalog)} text-capable models from OpenRouter.", api_key
+		return CatalogLoad(
+			catalog,
+			f"Loaded {len(catalog)} text-capable models from OpenRouter.",
+			api_key,
+			ready=True,
+		)
 	except Exception as exc:
-		return (
+		return CatalogLoad(
 			_fallback_model_catalog(),
 			f"Warning: could not load the live OpenRouter catalog ({exc}). Using the fallback model list.",
 			api_key,
+			ready=False,
 		)
 
 

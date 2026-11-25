@@ -90,6 +90,7 @@ MODEL_CATALOG = _fallback_model_catalog()
 MODEL_CATALOG_STATUS = (
 	"Warning: model catalog has not been initialized. Using the fallback model list."
 )
+MODEL_CATALOG_READY = False
 OPENROUTER_API_KEY: str | None = None
 MODEL_LOOKUP = {entry["model_id"]: entry for entry in MODEL_CATALOG}
 PROVIDER_CHOICES, PROVIDER_MODELS = _build_provider_index(MODEL_CATALOG)
@@ -110,9 +111,11 @@ def _set_model_catalog_state(
 	model_catalog: list[dict[str, Any]],
 	model_catalog_status: str,
 	openrouter_api_key: str | None,
+	model_catalog_ready: bool,
 ) -> None:
 	global DEFAULT_PANEL_MODEL_IDS
 	global MODEL_CATALOG
+	global MODEL_CATALOG_READY
 	global MODEL_CATALOG_STATUS
 	global MODEL_LOOKUP
 	global OPENROUTER_API_KEY
@@ -121,6 +124,7 @@ def _set_model_catalog_state(
 
 	MODEL_CATALOG = model_catalog
 	MODEL_CATALOG_STATUS = model_catalog_status
+	MODEL_CATALOG_READY = model_catalog_ready
 	OPENROUTER_API_KEY = openrouter_api_key
 	MODEL_LOOKUP = {entry["model_id"]: entry for entry in MODEL_CATALOG}
 	PROVIDER_CHOICES, PROVIDER_MODELS = _build_provider_index(MODEL_CATALOG)
@@ -593,7 +597,7 @@ def _resolve_model_for_provider(provider_key: str, model_id: str | None = None) 
 
 
 def _selectors_interactive() -> bool:
-	return not MODEL_CATALOG_STATUS.lower().startswith("warning:")
+	return MODEL_CATALOG_READY
 
 
 def _reasoning_capabilities_for_model_id(model_id: str | None) -> dict[str, Any]:
