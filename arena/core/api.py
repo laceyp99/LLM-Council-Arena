@@ -100,6 +100,27 @@ def _legacy_reasoning_details(delta: dict[str, Any], start_index: int) -> list[d
 	]
 
 
+def _error_chunk(
+	slot: Any, model: str, message: str, *, response: Any | None = None
+) -> dict[str, Any]:
+	chunk: dict[str, Any] = {"event": "error", "slot": slot, "model": model, "error": message}
+	if response is not None:
+		chunk["response"] = response
+	return chunk
+
+
+def _http_error_message(response: httpx.Response) -> str:
+	"""Prefer OpenRouter's JSON error message over the bare HTTP status line."""
+	status_line = f"HTTP {response.status_code} {response.reason_phrase}".rstrip()
+	try:
+		body = response.json()
+	except ValueError:
+		return status_line
+	error = body.get("error") if isinstance(body, dict) else None
+	message = error.get("message") if isinstance(error, dict) else None
+	return f"{status_line}: {message}" if message else status_line
+
+
 class OpenRouterAPI:
 	def __init__(self, api_key: str, site_url: str = "", site_name: str = ""):
 		self.api_key = api_key
@@ -249,7 +270,11 @@ class OpenRouterAPI:
 		messages: list[dict],
 		**kwargs,
 	) -> AsyncGenerator[dict, None]:
-		"""Asynchronously prompt a single model and yield stream chunks."""
+		"""Stream one model's chunks, ending with a "complete" or "error" chunk.
+
+		Transport failures (timeouts, dropped connections) propagate; the
+		concurrent fan-in turns them into error chunks.
+		"""
 		model = request["model"]
 		slot = request.get("slot")
 		request_params = self._request_payload_params(request, kwargs)
@@ -264,179 +289,153 @@ class OpenRouterAPI:
 		final_usage: dict[str, Any] | None = None
 		finish_reason: str | None = None
 		accumulated_reasoning_details: list[dict[str, Any]] = []
-		provider_error_seen = False
 
-		try:
-			async with client.stream(
-				"POST",
-				f"{self.base_url}/chat/completions",
-				headers=self.headers,
-				json=payload,
-			) as response:
-				response.raise_for_status()
+		async with client.stream(
+			"POST",
+			f"{self.base_url}/chat/completions",
+			headers=self.headers,
+			json=payload,
+		) as response:
+			if response.is_error:
+				# Read the body so the error explains why (e.g. "Insufficient credits").
+				await response.aread()
+				yield _error_chunk(slot, model, _http_error_message(response))
+				return
 
-				async for line in response.aiter_lines():
-					if not line:
-						continue
-					if line.startswith("data: "):
-						data_str = line[len("data: ") :]
-						if data_str == "[DONE]":
-							break
+			async for line in response.aiter_lines():
+				if not line:
+					continue
+				if line.startswith("data: "):
+					data_str = line[len("data: ") :]
+					if data_str == "[DONE]":
+						break
 
-						try:
-							data = json.loads(data_str)
-							error = data.get("error")
-							if isinstance(error, dict):
-								provider_error_seen = True
-								yield {
-									"event": "error",
-									"slot": slot,
-									"model": model,
-									"error": error.get("message") or str(error),
-									"response": data,
-								}
-								break
-
-							usage = data.get("usage")
-							if isinstance(usage, dict):
-								final_usage = usage
-
-							choices = data.get("choices") or []
-							if not choices:
-								continue
-
-							choice = choices[0] or {}
-							finish_reason = choice.get("finish_reason") or finish_reason
-							delta = choice.get("delta") or {}
-							reasoning_details = _normalize_reasoning_details(
-								delta.get("reasoning_details")
+					try:
+						data = json.loads(data_str)
+						error = data.get("error")
+						if isinstance(error, dict):
+							yield _error_chunk(
+								slot,
+								model,
+								error.get("message") or str(error),
+								response=data,
 							)
-							if not reasoning_details:
-								reasoning_details.extend(
-									_legacy_reasoning_details(
-										delta, len(accumulated_reasoning_details)
-									)
-								)
+							return
 
-							if reasoning_details:
-								accumulated_reasoning_details = _merge_reasoning_details(
-									accumulated_reasoning_details,
-									reasoning_details,
-								)
-								yield {
-									"event": "reasoning",
-									"slot": slot,
-									"model": model,
-									"reasoning_details": [
-										dict(detail) for detail in accumulated_reasoning_details
-									],
-									"response": data,
-								}
+						usage = data.get("usage")
+						if isinstance(usage, dict):
+							final_usage = usage
 
-							content = delta.get("content")
-							if content:
-								if first_token_at is None:
-									first_token_at = time.perf_counter()
-								yield {
-									"slot": slot,
-									"model": model,
-									"delta": content,
-									"response": data,
-								}
-						except (json.JSONDecodeError, KeyError, IndexError):
-							# Handle potential malformed JSON or unexpected structure
+						choices = data.get("choices") or []
+						if not choices:
 							continue
 
-				if provider_error_seen:
-					return
+						choice = choices[0] or {}
+						finish_reason = choice.get("finish_reason") or finish_reason
+						delta = choice.get("delta") or {}
+						reasoning_details = _normalize_reasoning_details(
+							delta.get("reasoning_details")
+						)
+						if not reasoning_details:
+							reasoning_details.extend(
+								_legacy_reasoning_details(delta, len(accumulated_reasoning_details))
+							)
 
-				completed_at = time.perf_counter()
-				total_generation_time = completed_at - request_started_at
-				time_to_first_token = None
-				tokens_per_second = None
+						if reasoning_details:
+							accumulated_reasoning_details = _merge_reasoning_details(
+								accumulated_reasoning_details,
+								reasoning_details,
+							)
+							yield {
+								"event": "reasoning",
+								"slot": slot,
+								"model": model,
+								"reasoning_details": [
+									dict(detail) for detail in accumulated_reasoning_details
+								],
+								"response": data,
+							}
 
-				if first_token_at is not None:
-					time_to_first_token = first_token_at - request_started_at
-					generation_window = completed_at - first_token_at
-					completion_tokens = _to_float((final_usage or {}).get("completion_tokens"))
-					if completion_tokens is not None and generation_window > 0:
-						tokens_per_second = completion_tokens / generation_window
+						content = delta.get("content")
+						if content:
+							if first_token_at is None:
+								first_token_at = time.perf_counter()
+							yield {
+								"slot": slot,
+								"model": model,
+								"delta": content,
+								"response": data,
+							}
+					except (json.JSONDecodeError, KeyError, IndexError):
+						# Handle potential malformed JSON or unexpected structure
+						continue
 
-				yield {
-					"event": "complete",
-					"slot": slot,
-					"model": model,
-					"usage": final_usage,
-					"reasoning_details": [dict(detail) for detail in accumulated_reasoning_details],
-					"stats": {
-						"time_to_first_token": time_to_first_token,
-						"total_generation_time": total_generation_time,
-						"tokens_per_second": tokens_per_second,
-						"finish_reason": finish_reason,
-					},
-				}
-		except Exception as e:
+			completed_at = time.perf_counter()
+			total_generation_time = completed_at - request_started_at
+			time_to_first_token = None
+			tokens_per_second = None
+
+			if first_token_at is not None:
+				time_to_first_token = first_token_at - request_started_at
+				generation_window = completed_at - first_token_at
+				completion_tokens = _to_float((final_usage or {}).get("completion_tokens"))
+				if completion_tokens is not None and generation_window > 0:
+					tokens_per_second = completion_tokens / generation_window
+
 			yield {
+				"event": "complete",
 				"slot": slot,
 				"model": model,
-				"error": str(e),
+				"usage": final_usage,
+				"reasoning_details": [dict(detail) for detail in accumulated_reasoning_details],
+				"stats": {
+					"time_to_first_token": time_to_first_token,
+					"total_generation_time": total_generation_time,
+					"tokens_per_second": tokens_per_second,
+					"finish_reason": finish_reason,
+				},
 			}
 
 	async def prompt_models_concurrent(
 		self, models: list[Any], messages: list[dict], **kwargs
 	) -> AsyncGenerator[dict, None]:
-		"""
-		Asynchronously prompt multiple models concurrently and yield
-		individual chunks from their streams as they arrive.
+		"""Prompt models concurrently and yield their chunks as they arrive.
+
+		A model that fails is reported as an "error" chunk for its slot; the
+		fan-in itself does not raise for per-model failures.
 		"""
 		request_specs = self._normalize_prompt_requests(models)
+		# None marks the end of one model's stream.
+		queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
 		async with httpx.AsyncClient(timeout=60.0) as client:
-			# Create a generator for each model's stream
-			generators = [
-				self._prompt_model(client, request_spec, messages, **kwargs)
-				for request_spec in request_specs
-			]
 
-			# Use an async queue to collect chunks from all streams
-			queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+			async def produce(request_spec: dict[str, Any]) -> None:
+				try:
+					async for chunk in self._prompt_model(client, request_spec, messages, **kwargs):
+						queue.put_nowait(chunk)
+				except Exception as error:
+					queue.put_nowait(
+						_error_chunk(
+							request_spec.get("slot"),
+							request_spec["model"],
+							str(error) or type(error).__name__,
+						)
+					)
+				finally:
+					queue.put_nowait(None)
 
-			async def producer(gen):
-				async for chunk in gen:
-					await queue.put(chunk)
-
-			# Start all streams as concurrent tasks
-			tasks = [asyncio.create_task(producer(gen)) for gen in generators]
-
+			tasks = [asyncio.create_task(produce(spec)) for spec in request_specs]
 			try:
-				# Keep draining queued chunks until all producers finish or one fails.
-				while True:
-					try:
-						chunk = await asyncio.wait_for(queue.get(), timeout=0.1)
+				open_streams = len(tasks)
+				while open_streams:
+					chunk = await queue.get()
+					if chunk is None:
+						open_streams -= 1
+					else:
 						yield chunk
-						queue.task_done()
-					except asyncio.TimeoutError:
-						pass
-
-					finished_tasks = [task for task in tasks if task.done()]
-					for task in finished_tasks:
-						if task.cancelled():
-							continue
-
-						task_exception = task.exception()
-						if task_exception is not None:
-							for remaining_task in tasks:
-								if not remaining_task.done():
-									remaining_task.cancel()
-							await asyncio.gather(*tasks, return_exceptions=True)
-							raise task_exception
-
-					tasks = [task for task in tasks if not task.done()]
-					if not tasks and queue.empty():
-						break
 			finally:
+				# Only does work if the consumer stopped early.
 				for task in tasks:
-					if not task.done():
-						task.cancel()
-				if tasks:
-					await asyncio.gather(*tasks, return_exceptions=True)
+					task.cancel()
+				await asyncio.gather(*tasks, return_exceptions=True)
