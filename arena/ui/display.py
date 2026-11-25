@@ -3,35 +3,35 @@ from typing import Any
 import gradio as gr
 
 from arena.state.round import (
-	_display_order_from_state,
-	_panel_label,
-	_slot_logs_from_state,
+	display_order_from_state,
+	panel_label,
+	slot_logs_from_state,
 )
 from arena.ui.config import PANEL_COUNT
 
 
-def _chatbot_config(**kwargs: Any) -> gr.Chatbot:
+def chatbot_config(**kwargs: Any) -> gr.Chatbot:
 	return gr.Chatbot(type="messages", group_consecutive_messages=False, **kwargs)
 
 
 def _chatbot_panel_label(display_index: int, round_state: dict[str, Any] | None = None) -> str:
 	if not isinstance(round_state, dict) or not round_state.get("submitted"):
-		return _panel_label(display_index)
+		return panel_label(display_index)
 
-	display_order = _display_order_from_state(round_state)
-	slot_logs = _slot_logs_from_state(round_state)
+	display_order = display_order_from_state(round_state)
+	slot_logs = slot_logs_from_state(round_state)
 	if display_index >= len(display_order):
-		return _panel_label(display_index)
+		return panel_label(display_index)
 
 	slot = display_order[display_index]
 	if slot >= len(slot_logs):
-		return _panel_label(display_index)
+		return panel_label(display_index)
 
 	model_label = str(slot_logs[slot].get("model_label") or "").strip()
-	return model_label or _panel_label(display_index)
+	return model_label or panel_label(display_index)
 
 
-def _message_text_content(message: Any) -> str:
+def message_text_content(message: Any) -> str:
 	if isinstance(message, gr.ChatMessage):
 		return message.content if isinstance(message.content, str) else ""
 	if isinstance(message, dict):
@@ -53,7 +53,7 @@ def _serialize_message(message: Any) -> dict[str, Any]:
 	if isinstance(message, dict):
 		serialized = {
 			"role": str(message.get("role") or "assistant"),
-			"content": _message_text_content(message),
+			"content": message_text_content(message),
 		}
 		metadata = message.get("metadata")
 		if isinstance(metadata, dict) and metadata:
@@ -67,7 +67,7 @@ def _serialize_history(history: list[Any]) -> list[dict[str, Any]]:
 	return [_serialize_message(message) for message in history]
 
 
-def _status_message(content: str, title: str) -> gr.ChatMessage:
+def status_message(content: str, title: str) -> gr.ChatMessage:
 	return gr.ChatMessage(
 		role="assistant",
 		content=content,
@@ -75,7 +75,7 @@ def _status_message(content: str, title: str) -> gr.ChatMessage:
 	)
 
 
-def _finalize_round_state_logs(
+def finalize_round_state_logs(
 	round_state: dict[str, Any],
 	histories: list[list[Any]],
 	reasoning_message_indices: list[int | None],
@@ -90,7 +90,7 @@ def _finalize_round_state_logs(
 		slot_log["message_history"] = _serialize_history(history)
 		reasoning_index = reasoning_message_indices[slot]
 		if isinstance(reasoning_index, int) and 0 <= reasoning_index < len(history):
-			slot_log["reasoning_trace"] = _message_text_content(history[reasoning_index]).strip()
+			slot_log["reasoning_trace"] = message_text_content(history[reasoning_index]).strip()
 
 
 def _format_duration(value: float | None) -> str:
@@ -115,7 +115,7 @@ def _format_cost(value: float | None) -> str:
 	return f"${value:.8f}"
 
 
-def _extract_reasoning_tokens(usage: dict[str, Any] | None) -> int | None:
+def extract_reasoning_tokens(usage: dict[str, Any] | None) -> int | None:
 	if not isinstance(usage, dict):
 		return None
 
@@ -137,7 +137,7 @@ def _reasoning_trace_title(
 	if unavailable:
 		return "🔎 Reasoning Trace (not exposed)"
 
-	reasoning_tokens = _extract_reasoning_tokens(usage)
+	reasoning_tokens = extract_reasoning_tokens(usage)
 	if reasoning_tokens is None:
 		return "🔎 Reasoning Trace"
 
@@ -145,7 +145,7 @@ def _reasoning_trace_title(
 	return f"🔎 Reasoning Trace · {reasoning_tokens} {token_label}"
 
 
-def _format_reasoning_details(reasoning_details: list[dict[str, Any]]) -> str:
+def format_reasoning_details(reasoning_details: list[dict[str, Any]]) -> str:
 	def _append_section(sections: list[str], section: str) -> None:
 		if section and (not sections or sections[-1] != section):
 			sections.append(section)
@@ -205,7 +205,7 @@ def _format_reasoning_details(reasoning_details: list[dict[str, Any]]) -> str:
 	return "\n\n".join(section for section in sections if section).strip()
 
 
-def _upsert_assistant_message(
+def upsert_assistant_message(
 	history: list[Any],
 	message_index: int | None,
 	content: str,
@@ -215,7 +215,7 @@ def _upsert_assistant_message(
 		history.append({"role": "assistant", "content": content})
 		return len(history) - 1
 
-	current_content = _message_text_content(history[message_index])
+	current_content = message_text_content(history[message_index])
 	history[message_index] = {
 		"role": "assistant",
 		"content": f"{current_content}{content}" if append else content,
@@ -223,7 +223,7 @@ def _upsert_assistant_message(
 	return message_index
 
 
-def _upsert_reasoning_message(
+def upsert_reasoning_message(
 	history: list[Any],
 	message_index: int | None,
 	slot: int,
@@ -255,12 +255,12 @@ def _upsert_reasoning_message(
 	return message_index, assistant_message_index
 
 
-def _stats_footer(history: list[Any], chunk: dict[str, Any]) -> list[Any]:
+def stats_footer(history: list[Any], chunk: dict[str, Any]) -> list[Any]:
 	stats = chunk.get("stats") or {}
 	usage = chunk.get("usage") or {}
 	cost = usage.get("cost") if isinstance(usage, dict) else None
 	completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
-	reasoning_tokens = _extract_reasoning_tokens(usage if isinstance(usage, dict) else None)
+	reasoning_tokens = extract_reasoning_tokens(usage if isinstance(usage, dict) else None)
 	finish_reason = stats.get("finish_reason") or "n/a"
 	completion_tokens_label = str(completion_tokens) if completion_tokens is not None else "n/a"
 	reasoning_tokens_label = str(reasoning_tokens) if reasoning_tokens is not None else "n/a"
@@ -284,13 +284,13 @@ def _stats_footer(history: list[Any], chunk: dict[str, Any]) -> list[Any]:
 	return history
 
 
-def _chatbot_updates(
+def chatbot_updates(
 	histories: list[list[Any]],
 	display_order: list[int],
 	round_state: dict[str, Any] | None = None,
 ) -> tuple[gr.Chatbot, gr.Chatbot, gr.Chatbot]:
 	return tuple(
-		_chatbot_config(
+		chatbot_config(
 			value=histories[display_order[index]],
 			label=_chatbot_panel_label(index, round_state),
 		)
@@ -305,7 +305,7 @@ def _chatbot_values(
 	return tuple(histories[display_order[index]] for index in range(PANEL_COUNT))
 
 
-def _targeted_chatbot_value_updates(
+def targeted_chatbot_value_updates(
 	histories: list[list[Any]],
 	display_order: list[int],
 	slot: int | None = None,
@@ -335,7 +335,7 @@ def _skip_vote_updates() -> tuple[Any, Any, Any, Any, Any, Any]:
 	return tuple(gr.skip() for _ in range(6))
 
 
-def _streaming_outputs(
+def streaming_outputs(
 	*,
 	user_input: Any | None = None,
 	chatbot_updates: tuple[Any, Any, Any] | None = None,
@@ -350,8 +350,8 @@ def _streaming_outputs(
 	)
 
 
-def _chatbot_histories_from_state(round_state: dict[str, Any] | None) -> list[list[Any]]:
-	slot_logs = _slot_logs_from_state(round_state)
+def chatbot_histories_from_state(round_state: dict[str, Any] | None) -> list[list[Any]]:
+	slot_logs = slot_logs_from_state(round_state)
 	histories: list[list[Any]] = []
 	for slot in range(PANEL_COUNT):
 		if slot >= len(slot_logs):
@@ -367,7 +367,7 @@ def _chatbot_histories_from_state(round_state: dict[str, Any] | None) -> list[li
 	return histories
 
 
-def _leaderboard_rows(model_totals: dict[str, Any] | None) -> list[list[Any]]:
+def leaderboard_rows(model_totals: dict[str, Any] | None) -> list[list[Any]]:
 	if not isinstance(model_totals, dict):
 		return []
 
@@ -416,7 +416,7 @@ def _leaderboard_rows(model_totals: dict[str, Any] | None) -> list[list[Any]]:
 	]
 
 
-def _leaderboard_summary(total_rounds: Any, leaderboard_rows: list[list[Any]]) -> str:
+def leaderboard_summary(total_rounds: Any, leaderboard_rows: list[list[Any]]) -> str:
 	row_count = len(leaderboard_rows)
 	rounds = int(total_rounds or 0)
 	if not row_count:

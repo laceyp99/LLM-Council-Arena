@@ -23,7 +23,7 @@ def _build_completed_round_state(
 	display_order: list[int] | None = None,
 ) -> dict[str, object]:
 	resolved_display_order = display_order if display_order is not None else [2, 0, 1]
-	round_state = app_module._build_round_state(
+	round_state = app_module.build_round_state(
 		user_text="Compare these models.",
 		system_prompt="System prompt",
 		message_payload=app_module._build_messages("Compare these models.", "System prompt"),
@@ -208,7 +208,7 @@ def test_submit_vote_outputs_uses_round_histories_and_leaderboard(monkeypatch) -
 	)
 	monkeypatch.setattr(
 		app_module,
-		"_chatbot_updates",
+		"chatbot_updates",
 		lambda histories, display_order, current_state: (
 			captured.update(
 				{
@@ -222,7 +222,7 @@ def test_submit_vote_outputs_uses_round_histories_and_leaderboard(monkeypatch) -
 	)
 	monkeypatch.setattr(
 		app_module,
-		"_vote_ui_updates",
+		"vote_ui_updates",
 		lambda current_state: ("vote-a", "vote-b", "vote-c", "vote-reset", "vote-submit"),
 	)
 	monkeypatch.setattr(

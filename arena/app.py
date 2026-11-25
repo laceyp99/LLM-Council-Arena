@@ -16,28 +16,28 @@ from uuid import uuid4
 import gradio as gr
 
 from arena.core.api import OpenRouterAPI
-from arena.core.models import CatalogState, _fallback_model_catalog, _load_model_catalog
+from arena.core.models import CatalogState, fallback_model_catalog, load_model_catalog
 from arena.core.reasoning import (
 	normalize_reasoning_payload,
 	reasoning_capabilities_for_model,
 	reasoning_cost_hint,
 )
 from arena.state.round import (
-	_build_round_state,
-	_default_display_order,
-	_display_order_from_state,
-	_empty_round_state,
-	_panel_label,
-	_shuffled_display_order,
-	_slot_logs_from_state,
+	build_round_state,
+	default_display_order,
+	display_order_from_state,
+	empty_round_state,
+	panel_label,
+	shuffled_display_order,
+	slot_logs_from_state,
 )
 from arena.state.voting import (
-	_display_mapping_from_state,
-	_ranking_choices_from_state,
-	_ranking_details_from_state,
-	_vote_ui_updates,
+	display_mapping_from_state,
+	ranking_choices_from_state,
+	ranking_details_from_state,
 	reset_vote,
 	vote_response,
+	vote_ui_updates,
 )
 from arena.ui.config import (
 	APP_DIR,
@@ -51,26 +51,26 @@ from arena.ui.config import (
 	VOTES_FILE,
 )
 from arena.ui.display import (
-	_chatbot_config,
-	_chatbot_histories_from_state,
-	_chatbot_updates,
-	_extract_reasoning_tokens,
-	_finalize_round_state_logs,
-	_format_reasoning_details,
-	_leaderboard_rows,
-	_leaderboard_summary,
-	_message_text_content,
-	_stats_footer,
-	_status_message,
-	_streaming_outputs,
-	_targeted_chatbot_value_updates,
-	_upsert_assistant_message,
-	_upsert_reasoning_message,
+	chatbot_config,
+	chatbot_histories_from_state,
+	chatbot_updates,
+	extract_reasoning_tokens,
+	finalize_round_state_logs,
+	format_reasoning_details,
+	leaderboard_rows,
+	leaderboard_summary,
+	message_text_content,
+	stats_footer,
+	status_message,
+	streaming_outputs,
+	targeted_chatbot_value_updates,
+	upsert_assistant_message,
+	upsert_reasoning_message,
 )
 
 # Fallback until initialize_model_catalog() runs; importing stays free of dotenv and network.
 CATALOG = CatalogState(
-	_fallback_model_catalog(),
+	fallback_model_catalog(),
 	"Warning: model catalog has not been initialized. Using the fallback model list.",
 )
 FILE_LOCK_TIMEOUT_SECONDS = 5.0
@@ -80,7 +80,7 @@ LOGGER = logging.getLogger(__name__)
 
 def initialize_model_catalog() -> None:
 	global CATALOG
-	CATALOG = _load_model_catalog(site_url=SITE_URL, site_name=SITE_NAME)
+	CATALOG = load_model_catalog(site_url=SITE_URL, site_name=SITE_NAME)
 
 
 def _timestamp_slug(iso_timestamp: str | None) -> str:
@@ -329,10 +329,10 @@ def _build_vote_record(
 				"model_id": slot_log.get("model_id") or "",
 				"model_label": slot_log.get("model_label") or "",
 			}
-			for slot_log in _slot_logs_from_state(round_state)
+			for slot_log in slot_logs_from_state(round_state)
 		],
-		"display_order": _display_mapping_from_state(round_state),
-		"ranking": _ranking_details_from_state(round_state),
+		"display_order": display_mapping_from_state(round_state),
+		"ranking": ranking_details_from_state(round_state),
 		"session_dir": session_dir,
 	}
 
@@ -350,7 +350,7 @@ def _build_round_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 			"system_prompt": round_state.get("system_prompt") or DEFAULT_SYSTEM_PROMPT,
 		},
 		"message_payload": round_state.get("messages_payload") or [],
-		"display_mapping": _display_mapping_from_state(round_state),
+		"display_mapping": display_mapping_from_state(round_state),
 		"completed_slots": round_state.get("completed_slots") or [],
 		"errored_slots": round_state.get("errored_slots") or [],
 	}
@@ -368,7 +368,7 @@ def _build_histories_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 				"model_label": slot_log.get("model_label") or "",
 				"message_history": slot_log.get("message_history") or [],
 			}
-			for slot_log in _slot_logs_from_state(round_state)
+			for slot_log in slot_logs_from_state(round_state)
 		],
 	}
 
@@ -397,7 +397,7 @@ def _build_generation_payload(round_state: dict[str, Any]) -> dict[str, Any]:
 				"completion_tokens": slot_log.get("completion_tokens"),
 				"reasoning_tokens": slot_log.get("reasoning_tokens"),
 			}
-			for slot_log in _slot_logs_from_state(round_state)
+			for slot_log in slot_logs_from_state(round_state)
 		],
 	}
 
@@ -415,7 +415,7 @@ def _update_meta_log_unlocked(round_state: dict[str, Any]) -> None:
 	meta_log["schema_version"] = META_LOG_SCHEMA_VERSION
 	model_totals = meta_log.setdefault("model_totals", {})
 
-	for slot_log in _slot_logs_from_state(round_state):
+	for slot_log in slot_logs_from_state(round_state):
 		model_id = str(slot_log.get("model_id") or "")
 		if not model_id:
 			continue
@@ -455,7 +455,7 @@ def _update_meta_log_unlocked(round_state: dict[str, Any]) -> None:
 		if isinstance(cost, (int, float)):
 			model_entry["total_cost"] = round(model_entry["total_cost"] + float(cost), 8)
 
-	for ranking_entry in _ranking_details_from_state(round_state):
+	for ranking_entry in ranking_details_from_state(round_state):
 		model_id = str(ranking_entry.get("model_id") or "")
 		if not model_id or model_id not in model_totals:
 			continue
@@ -496,8 +496,8 @@ def _write_round_session_artifacts(round_state: dict[str, Any], session_dir: Pat
 					"second_choice": round_state.get("second_choice"),
 					"third_choice": round_state.get("third_choice"),
 				},
-				"display_mapping": _display_mapping_from_state(round_state),
-				"ranking": _ranking_details_from_state(round_state),
+				"display_mapping": display_mapping_from_state(round_state),
+				"ranking": ranking_details_from_state(round_state),
 			},
 		)
 		_write_json_file(session_dir / "histories.json", _build_histories_payload(round_state))
@@ -595,11 +595,11 @@ def _build_messages(user_text: str, system_prompt: str) -> list[dict[str, str]]:
 
 def _reset_arena_outputs() -> tuple[Any, ...]:
 	empty_histories = [[] for _ in range(PANEL_COUNT)]
-	empty_state = _empty_round_state()
+	empty_state = empty_round_state()
 	return (
-		*_chatbot_updates(empty_histories, _default_display_order()),
+		*chatbot_updates(empty_histories, default_display_order()),
 		empty_state,
-		*_vote_ui_updates(empty_state),
+		*vote_ui_updates(empty_state),
 	)
 
 
@@ -609,23 +609,23 @@ def _leaderboard_view_data() -> tuple[str, list[list[Any]]]:
 	except RuntimeError as exc:
 		return f"## Leaderboard\n\nLeaderboard unavailable: {exc}", []
 
-	leaderboard_rows = _leaderboard_rows(meta_log.get("model_totals"))
-	return _leaderboard_summary(meta_log.get("total_rounds"), leaderboard_rows), leaderboard_rows
+	rows = leaderboard_rows(meta_log.get("model_totals"))
+	return leaderboard_summary(meta_log.get("total_rounds"), rows), rows
 
 
 def _submit_vote_outputs(
 	round_state: dict[str, Any] | None,
 ) -> tuple[Any, ...]:
-	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
+	current_state = round_state if isinstance(round_state, dict) else empty_round_state()
 	leaderboard_summary, leaderboard_rows = _leaderboard_view_data()
 	return (
 		current_state,
-		*_chatbot_updates(
-			_chatbot_histories_from_state(current_state),
-			_display_order_from_state(current_state),
+		*chatbot_updates(
+			chatbot_histories_from_state(current_state),
+			display_order_from_state(current_state),
 			current_state,
 		),
-		*_vote_ui_updates(current_state),
+		*vote_ui_updates(current_state),
 		leaderboard_summary,
 		leaderboard_rows,
 	)
@@ -670,7 +670,7 @@ def _prepare_reasoning_request(model_id: str, effort: str | None) -> dict[str, A
 
 
 def submit_vote(round_state: dict[str, Any] | None):
-	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
+	current_state = round_state if isinstance(round_state, dict) else empty_round_state()
 
 	if not current_state.get("round_id"):
 		return _submit_vote_outputs(current_state)
@@ -679,7 +679,7 @@ def submit_vote(round_state: dict[str, Any] | None):
 	if not current_state.get("ready_for_vote"):
 		return _submit_vote_outputs(current_state)
 
-	first_choice, second_choice, third_choice = _ranking_choices_from_state(current_state)
+	first_choice, second_choice, third_choice = ranking_choices_from_state(current_state)
 	if not all((first_choice, second_choice, third_choice)):
 		return _submit_vote_outputs(current_state)
 
@@ -731,18 +731,18 @@ def _apply_stream_chunk(
 		round_state["slot_logs"][slot]["status"] = "error"
 		round_state["slot_logs"][slot]["error"] = str(chunk.get("error") or "Unknown error")
 		histories[slot].append(
-			_status_message(
+			status_message(
 				f"[Error] {round_state['slot_logs'][slot]['error']}",
 				"Generation Error",
 			)
 		)
 		reasoning_index = reasoning_message_indices[slot]
 		if reasoning_index is not None:
-			reasoning_content = _message_text_content(histories[slot][reasoning_index]).strip()
+			reasoning_content = message_text_content(histories[slot][reasoning_index]).strip()
 			if not reasoning_content:
 				reasoning_content = "_Reasoning trace interrupted by an upstream error._"
 			reasoning_message_indices[slot], assistant_message_indices[slot] = (
-				_upsert_reasoning_message(
+				upsert_reasoning_message(
 					history=histories[slot],
 					message_index=reasoning_index,
 					slot=slot,
@@ -754,7 +754,7 @@ def _apply_stream_chunk(
 			)
 		changed_history = True
 	elif chunk.get("event") == "reasoning":
-		reasoning_content = _format_reasoning_details(chunk.get("reasoning_details") or [])
+		reasoning_content = format_reasoning_details(chunk.get("reasoning_details") or [])
 		if reasoning_content:
 			round_state["slot_logs"][slot]["status"] = "streaming"
 			round_state["slot_logs"][slot]["reasoning_trace"] = reasoning_content
@@ -764,7 +764,7 @@ def _apply_stream_chunk(
 				if isinstance(detail, dict)
 			]
 			reasoning_message_indices[slot], assistant_message_indices[slot] = (
-				_upsert_reasoning_message(
+				upsert_reasoning_message(
 					history=histories[slot],
 					message_index=reasoning_message_indices[slot],
 					slot=slot,
@@ -785,7 +785,7 @@ def _apply_stream_chunk(
 		round_state["slot_logs"][slot]["finish_reason"] = stats.get("finish_reason")
 		round_state["slot_logs"][slot]["cost"] = usage.get("cost")
 		round_state["slot_logs"][slot]["completion_tokens"] = usage.get("completion_tokens")
-		round_state["slot_logs"][slot]["reasoning_tokens"] = _extract_reasoning_tokens(usage)
+		round_state["slot_logs"][slot]["reasoning_tokens"] = extract_reasoning_tokens(usage)
 		reasoning_index = reasoning_message_indices[slot]
 		normalized_reasoning_details = [
 			dict(detail)
@@ -794,9 +794,9 @@ def _apply_stream_chunk(
 		]
 		if normalized_reasoning_details:
 			round_state["slot_logs"][slot]["reasoning_details"] = normalized_reasoning_details
-		reasoning_content = _format_reasoning_details(normalized_reasoning_details)
+		reasoning_content = format_reasoning_details(normalized_reasoning_details)
 		if reasoning_index is not None:
-			existing_reasoning_content = _message_text_content(
+			existing_reasoning_content = message_text_content(
 				histories[slot][reasoning_index]
 			).strip()
 			final_reasoning_content = (
@@ -805,7 +805,7 @@ def _apply_stream_chunk(
 				or "_No reasoning trace was exposed in the final stream payload._"
 			)
 			reasoning_message_indices[slot], assistant_message_indices[slot] = (
-				_upsert_reasoning_message(
+				upsert_reasoning_message(
 					history=histories[slot],
 					message_index=reasoning_index,
 					slot=slot,
@@ -817,7 +817,7 @@ def _apply_stream_chunk(
 			)
 		elif reasoning_content:
 			reasoning_message_indices[slot], assistant_message_indices[slot] = (
-				_upsert_reasoning_message(
+				upsert_reasoning_message(
 					history=histories[slot],
 					message_index=None,
 					slot=slot,
@@ -827,9 +827,9 @@ def _apply_stream_chunk(
 					assistant_message_index=assistant_message_indices[slot],
 				)
 			)
-		elif _extract_reasoning_tokens(chunk.get("usage")):
+		elif extract_reasoning_tokens(chunk.get("usage")):
 			reasoning_message_indices[slot], assistant_message_indices[slot] = (
-				_upsert_reasoning_message(
+				upsert_reasoning_message(
 					history=histories[slot],
 					message_index=None,
 					slot=slot,
@@ -843,7 +843,7 @@ def _apply_stream_chunk(
 					assistant_message_index=assistant_message_indices[slot],
 				)
 			)
-		histories[slot] = _stats_footer(histories[slot], chunk)
+		histories[slot] = stats_footer(histories[slot], chunk)
 		changed_history = True
 	else:
 		delta = chunk.get("delta", "")
@@ -852,7 +852,7 @@ def _apply_stream_chunk(
 			round_state["slot_logs"][slot]["final_response"] = (
 				f"{round_state['slot_logs'][slot]['final_response']}{delta}"
 			)
-			assistant_message_indices[slot] = _upsert_assistant_message(
+			assistant_message_indices[slot] = upsert_assistant_message(
 				history=histories[slot],
 				message_index=assistant_message_indices[slot],
 				content=delta,
@@ -864,7 +864,7 @@ def _apply_stream_chunk(
 		return None
 
 	if chunk.get("event") in {"complete", "error"}:
-		_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
+		finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 	return slot
 
 
@@ -876,7 +876,7 @@ def _finalize_generation_state(
 	completed_slots: set[int],
 	errored_slots: set[int],
 ) -> None:
-	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
+	finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 	round_state["completed_slots"] = sorted(completed_slots)
 	round_state["errored_slots"] = sorted(errored_slots)
 	round_state["generation_completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -918,12 +918,12 @@ async def stream_all_models(
 	reasoning_efforts = list(panel_inputs[PANEL_COUNT:])
 	reasoning_efforts += [None] * (PANEL_COUNT - len(reasoning_efforts))
 	message_payload = _build_messages(user_text, system_prompt)
-	display_order = _shuffled_display_order()
+	display_order = shuffled_display_order()
 	reasoning_requests = [
 		_prepare_reasoning_request(model_id, effort)
 		for model_id, effort in zip(model_ids, reasoning_efforts)
 	]
-	round_state = _build_round_state(
+	round_state = build_round_state(
 		user_text,
 		system_prompt,
 		message_payload,
@@ -949,14 +949,14 @@ async def stream_all_models(
 	for slot, request_metadata in enumerate(reasoning_requests):
 		reasoning_warning = request_metadata.get("reasoning_warning")
 		if isinstance(reasoning_warning, str) and reasoning_warning:
-			histories[slot].append(_status_message(f"[Warning] {reasoning_warning}", "Warning"))
-	_finalize_round_state_logs(round_state, histories, reasoning_message_indices)
+			histories[slot].append(status_message(f"[Warning] {reasoning_warning}", "Warning"))
+	finalize_round_state_logs(round_state, histories, reasoning_message_indices)
 
-	yield _streaming_outputs(
+	yield streaming_outputs(
 		user_input="",
-		chatbot_updates=_chatbot_updates(histories, display_order, round_state),
+		chatbot_updates=chatbot_updates(histories, display_order, round_state),
 		round_state=round_state,
-		vote_updates=_vote_ui_updates(round_state),
+		vote_updates=vote_ui_updates(round_state),
 	)
 
 	missing_selection = [index for index, model_id in enumerate(model_ids) if not model_id]
@@ -967,7 +967,7 @@ async def stream_all_models(
 			if model_id and index not in missing_selection
 		]
 		for index in missing_selection:
-			assistant_message_indices[index] = _upsert_assistant_message(
+			assistant_message_indices[index] = upsert_assistant_message(
 				history=histories[index],
 				message_index=assistant_message_indices[index],
 				content="No model selected for this panel.",
@@ -975,7 +975,7 @@ async def stream_all_models(
 			round_state["slot_logs"][index]["status"] = "blocked"
 			round_state["slot_logs"][index]["error"] = "No model selected for this panel."
 		for index in selected_but_unattempted:
-			assistant_message_indices[index] = _upsert_assistant_message(
+			assistant_message_indices[index] = upsert_assistant_message(
 				history=histories[index],
 				message_index=assistant_message_indices[index],
 				content="Generation blocked because each panel needs a selected model.",
@@ -991,18 +991,18 @@ async def stream_all_models(
 			reasoning_message_indices,
 			set(range(PANEL_COUNT)),
 		)
-		yield _streaming_outputs(
-			chatbot_updates=_targeted_chatbot_value_updates(
+		yield streaming_outputs(
+			chatbot_updates=targeted_chatbot_value_updates(
 				histories, display_order, update_all=True
 			),
 			round_state=round_state,
-			vote_updates=_vote_ui_updates(round_state),
+			vote_updates=vote_ui_updates(round_state),
 		)
 		return
 
 	if not CATALOG.api_key:
 		for index in range(PANEL_COUNT):
-			assistant_message_indices[index] = _upsert_assistant_message(
+			assistant_message_indices[index] = upsert_assistant_message(
 				history=histories[index],
 				message_index=assistant_message_indices[index],
 				content="Missing OPENROUTER_API_KEY in environment.",
@@ -1016,12 +1016,12 @@ async def stream_all_models(
 			reasoning_message_indices,
 			set(range(PANEL_COUNT)),
 		)
-		yield _streaming_outputs(
-			chatbot_updates=_targeted_chatbot_value_updates(
+		yield streaming_outputs(
+			chatbot_updates=targeted_chatbot_value_updates(
 				histories, display_order, update_all=True
 			),
 			round_state=round_state,
-			vote_updates=_vote_ui_updates(round_state),
+			vote_updates=vote_ui_updates(round_state),
 		)
 		return
 
@@ -1051,8 +1051,8 @@ async def stream_all_models(
 		)
 		if slot is None:
 			continue
-		yield _streaming_outputs(
-			chatbot_updates=_targeted_chatbot_value_updates(histories, display_order, slot=slot),
+		yield streaming_outputs(
+			chatbot_updates=targeted_chatbot_value_updates(histories, display_order, slot=slot),
 			round_state=round_state,
 		)
 
@@ -1065,9 +1065,9 @@ async def stream_all_models(
 		errored_slots,
 	)
 
-	yield _streaming_outputs(
+	yield streaming_outputs(
 		round_state=round_state,
-		vote_updates=_vote_ui_updates(round_state),
+		vote_updates=vote_ui_updates(round_state),
 	)
 
 
@@ -1134,21 +1134,19 @@ def create_demo() -> ArenaDemo:
 					lines=3,
 				)
 				send_btn = gr.Button("Send", interactive=interactive)
-				round_state = gr.State(_empty_round_state())
+				round_state = gr.State(empty_round_state())
 
 				panel_chats: list[gr.Chatbot] = []
 				with gr.Row():
 					for index in range(PANEL_COUNT):
 						with gr.Column(scale=1):
-							panel_chats.append(
-								_chatbot_config(label=_panel_label(index), height=520)
-							)
+							panel_chats.append(chatbot_config(label=panel_label(index), height=520))
 
 				with gr.Group():
 					gr.Markdown("## Vote on the Anonymous Responses")
 					with gr.Row():
 						vote_buttons = [
-							gr.Button(_panel_label(index), interactive=False)
+							gr.Button(panel_label(index), interactive=False)
 							for index in range(PANEL_COUNT)
 						]
 					with gr.Row():
@@ -1165,7 +1163,7 @@ def create_demo() -> ArenaDemo:
 					wrap=True,
 				)
 
-		# Shared output groups; order matches _vote_ui_updates() and _reset_arena_outputs().
+		# Shared output groups; order matches vote_ui_updates() and _reset_arena_outputs().
 		vote_controls = [*vote_buttons, vote_reset_btn, vote_submit_btn, vote_status_banner]
 		arena_reset_outputs = [*panel_chats, round_state, *vote_controls]
 

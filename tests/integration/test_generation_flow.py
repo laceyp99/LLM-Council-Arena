@@ -10,17 +10,17 @@ from arena.core import api as api_module
 def _stub_ui_helpers(monkeypatch) -> None:
 	monkeypatch.setattr(
 		app_module,
-		"_chatbot_updates",
+		"chatbot_updates",
 		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
 	)
 	monkeypatch.setattr(
 		app_module,
-		"_targeted_chatbot_value_updates",
+		"targeted_chatbot_value_updates",
 		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
 	)
 	monkeypatch.setattr(
 		app_module,
-		"_vote_ui_updates",
+		"vote_ui_updates",
 		lambda *args, **kwargs: (
 			"vote-a",
 			"vote-b",
@@ -137,7 +137,7 @@ def _build_generation_context() -> tuple[
 	set[int],
 ]:
 	user_text = "Compare the models."
-	round_state = app_module._build_round_state(
+	round_state = app_module.build_round_state(
 		user_text=user_text,
 		system_prompt="System prompt",
 		message_payload=app_module._build_messages(user_text, "System prompt"),
@@ -173,13 +173,13 @@ def test_apply_stream_chunk_appends_delta_without_finalizing_logs(monkeypatch) -
 		errored_slots,
 	) = _build_generation_context()
 	finalize_calls: list[object] = []
-	original_finalize = app_module._finalize_round_state_logs
+	original_finalize = app_module.finalize_round_state_logs
 
 	def track_finalization(*args) -> None:
 		finalize_calls.append(args)
 		original_finalize(*args)
 
-	monkeypatch.setattr(app_module, "_finalize_round_state_logs", track_finalization)
+	monkeypatch.setattr(app_module, "finalize_round_state_logs", track_finalization)
 
 	slot = app_module._apply_stream_chunk(
 		round_state,
@@ -451,7 +451,7 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(
 	monkeypatch, use_catalog
 ) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
 	catalog = use_catalog(
 		{
 			"model_id": "beta/two",
@@ -560,7 +560,7 @@ async def test_stream_all_models_emits_reasoning_payload_through_openrouter_requ
 	use_catalog,
 ) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
 	use_catalog(
 		{
 			"model_id": "alpha/one",
@@ -648,7 +648,7 @@ async def test_stream_all_models_warns_when_selected_reasoning_is_unsupported(
 	use_catalog,
 ) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
 	use_catalog()
 	requests = _fake_streaming_api(
 		monkeypatch,
@@ -693,7 +693,7 @@ async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(
 ) -> None:
 	_stub_ui_helpers(monkeypatch)
 	use_catalog()
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
 	_fake_streaming_api(
 		monkeypatch,
 		[
@@ -736,7 +736,7 @@ async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(
 async def test_stream_all_models_reports_stream_failure_per_slot(monkeypatch, use_catalog) -> None:
 	_stub_ui_helpers(monkeypatch)
 	use_catalog()
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
 	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
 	monkeypatch.setattr(app_module.OpenRouterAPI, "_prompt_model", _failing_prompt_model)
 

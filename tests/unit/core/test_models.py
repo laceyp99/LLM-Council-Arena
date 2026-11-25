@@ -3,13 +3,13 @@ from arena.core.models import (
 	CatalogState,
 	_build_provider_index,
 	_default_model_ids,
-	_fallback_model_catalog,
-	_load_model_catalog,
+	fallback_model_catalog,
+	load_model_catalog,
 )
 
 
 def test_fallback_model_catalog_has_expected_entries() -> None:
-	catalog = _fallback_model_catalog()
+	catalog = fallback_model_catalog()
 
 	assert [entry["provider_key"] for entry in catalog] == ["google", "openai", "anthropic"]
 	assert [entry["model_id"] for entry in catalog] == [
@@ -113,12 +113,12 @@ def test_load_model_catalog_without_api_key_uses_fallback(monkeypatch) -> None:
 	monkeypatch.setattr(model_module, "load_dotenv", lambda: None)
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: None)
 
-	state = _load_model_catalog(
+	state = load_model_catalog(
 		site_url="http://localhost:7860",
 		site_name="LLM Council Arena",
 	)
 
-	assert state.catalog == _fallback_model_catalog()
+	assert state.catalog == fallback_model_catalog()
 	assert "missing" in state.status.lower()
 	assert state.api_key is None
 	assert state.ready is False
@@ -149,7 +149,7 @@ def test_load_model_catalog_with_api_key_returns_live_catalog(monkeypatch) -> No
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 
-	state = _load_model_catalog(
+	state = load_model_catalog(
 		site_url="http://localhost:7860",
 		site_name="LLM Council Arena",
 	)
@@ -183,12 +183,12 @@ def test_load_model_catalog_with_api_key_falls_back_on_catalog_error(monkeypatch
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 
-	state = _load_model_catalog(
+	state = load_model_catalog(
 		site_url="http://localhost:7860",
 		site_name="LLM Council Arena",
 	)
 
-	assert state.catalog == _fallback_model_catalog()
+	assert state.catalog == fallback_model_catalog()
 	assert "could not load the live openrouter catalog" in state.status.lower()
 	assert state.api_key == "test-api-key"
 	assert state.ready is False
@@ -209,12 +209,12 @@ def test_load_model_catalog_with_api_key_falls_back_on_key_validation_error(monk
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 
-	state = _load_model_catalog(
+	state = load_model_catalog(
 		site_url="http://localhost:7860",
 		site_name="LLM Council Arena",
 	)
 
-	assert state.catalog == _fallback_model_catalog()
+	assert state.catalog == fallback_model_catalog()
 	assert "could not validate openrouter_api_key" in state.status.lower()
 	assert state.api_key == "test-api-key"
 	assert state.ready is False

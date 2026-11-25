@@ -23,7 +23,7 @@ def _startup_selector_config(
 
 		import arena.core.models as model_module
 
-		model_module._load_model_catalog = lambda site_url, site_name: model_module.CatalogState(
+		model_module.load_model_catalog = lambda site_url, site_name: model_module.CatalogState(
 			[
 				{
 					"model_id": "alpha/one",

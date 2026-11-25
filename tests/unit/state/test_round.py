@@ -1,28 +1,28 @@
 import hashlib
 
 from arena.state.round import (
-	_build_round_state,
-	_default_display_order,
-	_display_order_from_state,
+	build_round_state,
+	default_display_order,
+	display_order_from_state,
 )
 from arena.ui.config import DEFAULT_SYSTEM_PROMPT, PANEL_COUNT
 
 
 def test_default_display_order_matches_panel_count() -> None:
-	assert _default_display_order() == [0, 1, 2]
-	assert len(_default_display_order()) == PANEL_COUNT
+	assert default_display_order() == [0, 1, 2]
+	assert len(default_display_order()) == PANEL_COUNT
 
 
 def test_display_order_from_state_falls_back_on_invalid_state() -> None:
-	assert _display_order_from_state(None) == _default_display_order()
-	assert _display_order_from_state({"display_order": [0, 1]}) == _default_display_order()
-	assert _display_order_from_state({"display_order": [0, 0, 2]}) == _default_display_order()
-	assert _display_order_from_state({"display_order": ["a", 1, 2]}) == _default_display_order()
+	assert display_order_from_state(None) == default_display_order()
+	assert display_order_from_state({"display_order": [0, 1]}) == default_display_order()
+	assert display_order_from_state({"display_order": [0, 0, 2]}) == default_display_order()
+	assert display_order_from_state({"display_order": ["a", 1, 2]}) == default_display_order()
 
 
 def test_build_round_state_sets_defaults_and_slot_logs() -> None:
 	message_payload = [{"role": "user", "content": "Compare these models."}]
-	round_state = _build_round_state(
+	round_state = build_round_state(
 		user_text="Compare these models.",
 		system_prompt="   ",
 		message_payload=message_payload,

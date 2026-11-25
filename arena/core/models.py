@@ -31,7 +31,7 @@ def _fallback_entry(
 	return entry
 
 
-def _fallback_model_catalog() -> list[dict[str, Any]]:
+def fallback_model_catalog() -> list[dict[str, Any]]:
 	return [
 		_fallback_entry(
 			"google/gemini-3.5-flash-lite",
@@ -112,13 +112,13 @@ class CatalogState:
 		return provider_entries[0]["model_id"]
 
 
-def _load_model_catalog(site_url: str, site_name: str) -> CatalogState:
+def load_model_catalog(site_url: str, site_name: str) -> CatalogState:
 	load_dotenv()
 	api_key = os.getenv("OPENROUTER_API_KEY")
 
 	if not api_key:
 		return CatalogState(
-			_fallback_model_catalog(),
+			fallback_model_catalog(),
 			"Warning: OPENROUTER_API_KEY is missing. Using the fallback model list until an API key is configured.",
 			api_key,
 		)
@@ -129,7 +129,7 @@ def _load_model_catalog(site_url: str, site_name: str) -> CatalogState:
 		api.get_key_info()
 	except Exception as exc:
 		return CatalogState(
-			_fallback_model_catalog(),
+			fallback_model_catalog(),
 			f"Warning: could not validate OPENROUTER_API_KEY ({exc}). Using the fallback model list.",
 			api_key,
 		)
@@ -146,7 +146,7 @@ def _load_model_catalog(site_url: str, site_name: str) -> CatalogState:
 		)
 	except Exception as exc:
 		return CatalogState(
-			_fallback_model_catalog(),
+			fallback_model_catalog(),
 			f"Warning: could not load the live OpenRouter catalog ({exc}). Using the fallback model list.",
 			api_key,
 		)

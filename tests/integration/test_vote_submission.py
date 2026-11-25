@@ -15,7 +15,7 @@ def _read_votes() -> list[dict[str, object]]:
 def _stub_chatbot_updates(monkeypatch) -> None:
 	monkeypatch.setattr(
 		app_module,
-		"_chatbot_updates",
+		"chatbot_updates",
 		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
 	)
 
@@ -31,7 +31,7 @@ def _patch_log_paths(monkeypatch, tmp_path) -> None:
 
 
 def _build_votable_round_state() -> dict[str, object]:
-	round_state = app_module._build_round_state(
+	round_state = app_module.build_round_state(
 		user_text="Compare these models.",
 		system_prompt="System prompt",
 		message_payload=app_module._build_messages("Compare these models.", "System prompt"),
