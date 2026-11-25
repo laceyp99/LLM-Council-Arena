@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
 from html import escape
@@ -15,24 +16,7 @@ from uuid import uuid4
 import gradio as gr
 
 from arena.core.api import OpenRouterAPI
-from arena.core.models import (
-	_build_provider_index,
-	_default_model_ids,
-	_fallback_model_catalog,
-	_load_model_catalog,
-)
-from arena.core.models import (
-	_chatbot_label as _catalog_chatbot_label,
-)
-from arena.core.models import (
-	_model_choices_for_provider as _catalog_model_choices_for_provider,
-)
-from arena.core.models import (
-	_provider_for_model as _catalog_provider_for_model,
-)
-from arena.core.models import (
-	_resolve_model_for_provider as _catalog_resolve_model_for_provider,
-)
+from arena.core.models import CatalogState, _fallback_model_catalog, _load_model_catalog
 from arena.core.reasoning import (
 	normalize_reasoning_payload,
 	reasoning_capabilities_for_model,
@@ -57,7 +41,6 @@ from arena.state.voting import (
 )
 from arena.ui.config import (
 	APP_DIR,
-	DEFAULT_MODEL_IDS,
 	DEFAULT_SYSTEM_PROMPT,
 	LOGS_DIR,
 	META_LOG_FILE,
@@ -85,62 +68,19 @@ from arena.ui.display import (
 	_upsert_reasoning_message,
 )
 
-MODEL_CATALOG = _fallback_model_catalog()
-MODEL_CATALOG_STATUS = (
-	"Warning: model catalog has not been initialized. Using the fallback model list."
-)
-MODEL_CATALOG_READY = False
-OPENROUTER_API_KEY: str | None = None
-MODEL_LOOKUP = {entry["model_id"]: entry for entry in MODEL_CATALOG}
-PROVIDER_CHOICES, PROVIDER_MODELS = _build_provider_index(MODEL_CATALOG)
-DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
-	model_catalog=MODEL_CATALOG,
-	provider_models=PROVIDER_MODELS,
-	default_model_ids=DEFAULT_MODEL_IDS,
-	panel_count=PANEL_COUNT,
+# Fallback until initialize_model_catalog() runs; importing stays free of dotenv and network.
+CATALOG = CatalogState(
+	_fallback_model_catalog(),
+	"Warning: model catalog has not been initialized. Using the fallback model list.",
 )
 FILE_LOCK_TIMEOUT_SECONDS = 5.0
 FILE_LOCK_RETRY_INTERVAL_SECONDS = 0.01
-demo: gr.Blocks | None = None
 LOGGER = logging.getLogger(__name__)
 
 
-def _set_model_catalog_state(
-	model_catalog: list[dict[str, Any]],
-	model_catalog_status: str,
-	openrouter_api_key: str | None,
-	model_catalog_ready: bool,
-) -> None:
-	global DEFAULT_PANEL_MODEL_IDS
-	global MODEL_CATALOG
-	global MODEL_CATALOG_READY
-	global MODEL_CATALOG_STATUS
-	global MODEL_LOOKUP
-	global OPENROUTER_API_KEY
-	global PROVIDER_CHOICES
-	global PROVIDER_MODELS
-
-	MODEL_CATALOG = model_catalog
-	MODEL_CATALOG_STATUS = model_catalog_status
-	MODEL_CATALOG_READY = model_catalog_ready
-	OPENROUTER_API_KEY = openrouter_api_key
-	MODEL_LOOKUP = {entry["model_id"]: entry for entry in MODEL_CATALOG}
-	PROVIDER_CHOICES, PROVIDER_MODELS = _build_provider_index(MODEL_CATALOG)
-	DEFAULT_PANEL_MODEL_IDS = _default_model_ids(
-		model_catalog=MODEL_CATALOG,
-		provider_models=PROVIDER_MODELS,
-		default_model_ids=DEFAULT_MODEL_IDS,
-		panel_count=PANEL_COUNT,
-	)
-
-
 def initialize_model_catalog() -> None:
-	_set_model_catalog_state(
-		*_load_model_catalog(
-			site_url=SITE_URL,
-			site_name=SITE_NAME,
-		)
-	)
+	global CATALOG
+	CATALOG = _load_model_catalog(site_url=SITE_URL, site_name=SITE_NAME)
 
 
 def _timestamp_slug(iso_timestamp: str | None) -> str:
@@ -591,36 +531,14 @@ def _persist_vote_submission(round_state: dict[str, Any]) -> str:
 	return session_dir_relative
 
 
-def _chatbot_label(model_id: str) -> str:
-	return _catalog_chatbot_label(MODEL_LOOKUP, model_id)
-
-
-def _provider_for_model(model_id: str) -> str:
-	return _catalog_provider_for_model(MODEL_LOOKUP, PROVIDER_CHOICES, model_id)
-
-
-def _model_choices_for_provider(provider_key: str) -> list[tuple[str, str]]:
-	return _catalog_model_choices_for_provider(PROVIDER_MODELS, MODEL_CATALOG, provider_key)
-
-
-def _resolve_model_for_provider(provider_key: str, model_id: str | None = None) -> str:
-	return _catalog_resolve_model_for_provider(
-		PROVIDER_MODELS, MODEL_CATALOG, provider_key, model_id
-	)
-
-
-def _selectors_interactive() -> bool:
-	return MODEL_CATALOG_READY
-
-
 def _reasoning_capabilities_for_model_id(model_id: str | None) -> dict[str, Any]:
-	return reasoning_capabilities_for_model(MODEL_LOOKUP.get(model_id or "", {}))
+	return reasoning_capabilities_for_model(CATALOG.lookup.get(model_id or "", {}))
 
 
 def _reasoning_control_config(model_id: str | None) -> dict[str, dict[str, Any]]:
 	capabilities = _reasoning_capabilities_for_model_id(model_id)
 	control_type = capabilities.get("control_type")
-	interactive = _selectors_interactive()
+	interactive = CATALOG.ready
 	cost_hint = reasoning_cost_hint(capabilities)
 
 	return {
@@ -647,7 +565,7 @@ def _reasoning_control_updates(model_id: str | None) -> tuple[Any, Any]:
 
 
 def _openrouter_status_banner() -> gr.HTML:
-	if _selectors_interactive():
+	if CATALOG.ready:
 		return gr.HTML(value="", visible=False)
 
 	message = (
@@ -714,12 +632,12 @@ def _submit_vote_outputs(
 
 
 def update_panel_provider(provider_key: str):
-	resolved_model_id = _resolve_model_for_provider(provider_key)
+	resolved_model_id = CATALOG.resolve_model_for_provider(provider_key)
 	return (
 		gr.update(
-			choices=_model_choices_for_provider(provider_key),
+			choices=CATALOG.model_choices_for_provider(provider_key),
 			value=resolved_model_id,
-			interactive=_selectors_interactive(),
+			interactive=CATALOG.ready,
 		),
 		*_reasoning_control_updates(resolved_model_id),
 		*_reset_arena_outputs(),
@@ -734,11 +652,11 @@ def update_panel_model(model_id: str):
 
 
 def _prepare_reasoning_request(model_id: str, effort: str | None) -> dict[str, Any]:
-	model_entry = MODEL_LOOKUP.get(model_id, {})
+	model_entry = CATALOG.lookup.get(model_id, {})
 	reasoning_payload = normalize_reasoning_payload(model_entry, {"effort": effort})
 	reasoning_warning = None
 	if effort not in (None, "none") and reasoning_payload is None:
-		model_label = _chatbot_label(model_id) if model_id else "This model"
+		model_label = CATALOG.chatbot_label(model_id) if model_id else "This model"
 		reasoning_warning = (
 			f"Reasoning effort '{effort}' was selected, but {model_label} does not "
 			"support an applied reasoning payload. The request will continue without "
@@ -1011,8 +929,8 @@ async def stream_all_models(
 		message_payload,
 		model_ids,
 		display_order,
-		chatbot_label=_chatbot_label,
-		provider_for_model=_provider_for_model,
+		chatbot_label=CATALOG.chatbot_label,
+		provider_for_model=CATALOG.provider_for_model,
 	)
 	for slot, request_metadata in enumerate(reasoning_requests):
 		round_state["slot_logs"][slot]["reasoning_payload"] = request_metadata["reasoning_payload"]
@@ -1082,7 +1000,7 @@ async def stream_all_models(
 		)
 		return
 
-	if not OPENROUTER_API_KEY:
+	if not CATALOG.api_key:
 		for index in range(PANEL_COUNT):
 			assistant_message_indices[index] = _upsert_assistant_message(
 				history=histories[index],
@@ -1107,7 +1025,7 @@ async def stream_all_models(
 		)
 		return
 
-	api = OpenRouterAPI(api_key=OPENROUTER_API_KEY, site_url=SITE_URL, site_name=SITE_NAME)
+	api = OpenRouterAPI(api_key=CATALOG.api_key, site_url=SITE_URL, site_name=SITE_NAME)
 	prompt_requests = [
 		{
 			"slot": slot,
@@ -1153,17 +1071,22 @@ async def stream_all_models(
 	)
 
 
-def create_demo() -> gr.Blocks:
-	global demo
-	global openrouter_status_banner
-	global panel_1_model
-	global panel_1_provider
-	global send_btn
+@dataclass(frozen=True)
+class ArenaDemo:
+	"""The built Blocks plus the components callers inspect after building."""
 
-	interactive = _selectors_interactive()
+	blocks: gr.Blocks
+	panel_providers: list[gr.Dropdown]
+	panel_models: list[gr.Dropdown]
+	send_button: gr.Button
+	status_banner: gr.HTML
+
+
+def create_demo() -> ArenaDemo:
+	interactive = CATALOG.ready
 	initial_leaderboard_summary, initial_leaderboard_rows = _leaderboard_view_data()
 
-	with gr.Blocks(title="LLM Council Arena") as built_demo:
+	with gr.Blocks(title="LLM Council Arena") as blocks:
 		gr.Markdown("# LLM Council Arena")
 
 		with gr.Tabs():
@@ -1175,14 +1098,14 @@ def create_demo() -> gr.Blocks:
 				panel_efforts: list[gr.Dropdown] = []
 				panel_cost_hints: list[gr.Markdown] = []
 				with gr.Row():
-					for model_id in DEFAULT_PANEL_MODEL_IDS:
-						provider_key = _provider_for_model(model_id)
+					for model_id in CATALOG.default_panel_model_ids:
+						provider_key = CATALOG.provider_for_model(model_id)
 						reasoning_config = _reasoning_control_config(model_id)
 						with gr.Column(scale=1):
 							panel_providers.append(
 								gr.Dropdown(
 									label="Provider",
-									choices=PROVIDER_CHOICES,
+									choices=CATALOG.provider_choices,
 									value=provider_key,
 									interactive=interactive,
 								)
@@ -1190,7 +1113,7 @@ def create_demo() -> gr.Blocks:
 							panel_models.append(
 								gr.Dropdown(
 									label="Model",
-									choices=_model_choices_for_provider(provider_key),
+									choices=CATALOG.model_choices_for_provider(provider_key),
 									value=model_id,
 									interactive=interactive,
 								)
@@ -1289,13 +1212,16 @@ def create_demo() -> gr.Blocks:
 				leaderboard_table,
 			],
 		)
-		built_demo.load(
+		blocks.load(
 			fn=_leaderboard_view_data,
 			inputs=None,
 			outputs=[leaderboard_summary_md, leaderboard_table],
 		)
 
-	panel_1_provider = panel_providers[0]
-	panel_1_model = panel_models[0]
-	demo = built_demo
-	return built_demo
+	return ArenaDemo(
+		blocks=blocks,
+		panel_providers=panel_providers,
+		panel_models=panel_models,
+		send_button=send_btn,
+		status_banner=openrouter_status_banner,
+	)

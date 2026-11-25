@@ -43,7 +43,6 @@ def test_importing_arena_app_does_not_create_persistence_files(tmp_path: Path) -
 
 		assert not config_module.VOTES_FILE.exists()
 		assert not config_module.LOGS_DIR.exists()
-		assert app_module.demo is None
 		"""
 	)
 
@@ -64,6 +63,8 @@ def test_importing_arena_app_does_not_load_openrouter_catalog() -> None:
 		"""
 		import importlib
 
+		import gradio as gr
+
 		from arena.core import models as model_module
 
 		def fail_load_dotenv():
@@ -73,14 +74,18 @@ def test_importing_arena_app_does_not_load_openrouter_catalog() -> None:
 			def __init__(self, *args, **kwargs) -> None:
 				raise AssertionError("OpenRouterAPI should not be constructed during arena.app import")
 
+		def fail_build_blocks(*args, **kwargs) -> None:
+			raise AssertionError("gr.Blocks should not be built during arena.app import")
+
 		model_module.load_dotenv = fail_load_dotenv
 		model_module.OpenRouterAPI = ExplodingOpenRouterAPI
+		gr.Blocks.__init__ = fail_build_blocks
 
 		app_module = importlib.import_module("arena.app")
 
-		assert app_module.OPENROUTER_API_KEY is None
-		assert app_module.demo is None
-		assert "not been initialized" in app_module.MODEL_CATALOG_STATUS
+		assert app_module.CATALOG.api_key is None
+		assert app_module.CATALOG.ready is False
+		assert "not been initialized" in app_module.CATALOG.status
 		"""
 	)
 
