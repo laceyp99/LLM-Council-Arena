@@ -1,11 +1,9 @@
 import asyncio
 import json
-import os
 import time
 from typing import Any, AsyncGenerator
 
 import httpx
-from dotenv import load_dotenv
 
 from arena.core.reasoning import reasoning_capabilities_for_model
 
@@ -442,47 +440,3 @@ class OpenRouterAPI:
 						task.cancel()
 				if tasks:
 					await asyncio.gather(*tasks, return_exceptions=True)
-
-
-async def main():
-	load_dotenv()
-	api_key = os.getenv("OPENROUTER_API_KEY")
-	api = OpenRouterAPI(
-		api_key=api_key, site_url="http://localhost:6767", site_name="LLM Council Arena"
-	)
-
-	# Synchronously fetch models
-	models = api.get_models()
-	print(f"Available models: {len(models)}")
-
-	# Select a few models to prompt
-	selected_models = [
-		"openai/gpt-5-nano",
-		"anthropic/claude-haiku-4.5",
-		"google/gemini-3-flash-preview",
-	]
-
-	messages = [
-		{
-			"role": "system",
-			"content": "You are a professional comic with a specialty in creating only knock knock jokes.",
-		},
-		{"role": "user", "content": "What do you have for me?"},
-	]
-
-	# Prompt all models concurrently and process responses as they arrive
-	print("\nStreaming responses...")
-	async for result in api.prompt_models_concurrent(selected_models, messages):
-		if "error" in result:
-			print(f"\nError for model {result.get('model', 'unknown')}: {result['error']}")
-		else:
-			# Simple way to show chunks from different models
-			model_name = result["model"]
-			delta = result["delta"]
-			print(f"[{model_name}] {delta}", end="", flush=True)
-
-	print("\n\nAll streams complete.")
-
-
-if __name__ == "__main__":
-	asyncio.run(main())

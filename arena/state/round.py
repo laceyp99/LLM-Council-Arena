@@ -157,17 +157,6 @@ def _display_order_from_state(round_state: dict[str, Any] | None) -> list[int]:
 	return normalized_order
 
 
-def _model_ids_from_state(round_state: dict[str, Any] | None) -> list[str]:
-	if not isinstance(round_state, dict):
-		return []
-
-	model_ids = round_state.get("model_ids")
-	if not isinstance(model_ids, list):
-		return []
-
-	return [str(model_id) for model_id in model_ids[:PANEL_COUNT]]
-
-
 def _slot_logs_from_state(round_state: dict[str, Any] | None) -> list[dict[str, Any]]:
 	if not isinstance(round_state, dict):
 		return []
