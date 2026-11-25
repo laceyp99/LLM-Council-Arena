@@ -208,18 +208,8 @@ def _vote_response(round_state: dict[str, Any] | None, response_label: str):
 	return current_state
 
 
-def vote_response_a(round_state: dict[str, Any] | None):
-	updated_state = _vote_response(round_state, _panel_label(0))
-	return updated_state, *_vote_ui_updates(updated_state)
-
-
-def vote_response_b(round_state: dict[str, Any] | None):
-	updated_state = _vote_response(round_state, _panel_label(1))
-	return updated_state, *_vote_ui_updates(updated_state)
-
-
-def vote_response_c(round_state: dict[str, Any] | None):
-	updated_state = _vote_response(round_state, _panel_label(2))
+def vote_response(round_state: dict[str, Any] | None, display_index: int):
+	updated_state = _vote_response(round_state, _panel_label(display_index))
 	return updated_state, *_vote_ui_updates(updated_state)
 
 

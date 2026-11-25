@@ -6,6 +6,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import partial
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -52,9 +53,7 @@ from arena.state.voting import (
 	_ranking_details_from_state,
 	_vote_ui_updates,
 	reset_vote,
-	vote_response_a,
-	vote_response_b,
-	vote_response_c,
+	vote_response,
 )
 from arena.ui.config import (
 	APP_DIR,
@@ -625,14 +624,6 @@ def _reasoning_control_config(model_id: str | None) -> dict[str, dict[str, Any]]
 	}
 
 
-def _reasoning_controls_for_model(model_id: str | None) -> tuple[Any, Any]:
-	config = _reasoning_control_config(model_id)
-	return (
-		gr.Dropdown(**config["effort"]),
-		gr.Markdown(**config["cost_hint"]),
-	)
-
-
 def _reasoning_control_updates(model_id: str | None) -> tuple[Any, Any]:
 	config = _reasoning_control_config(model_id)
 	return (
@@ -711,7 +702,7 @@ def _submit_vote_outputs(
 def update_panel_provider(provider_key: str):
 	resolved_model_id = _resolve_model_for_provider(provider_key)
 	return (
-		gr.Dropdown(
+		gr.update(
 			choices=_model_choices_for_provider(provider_key),
 			value=resolved_model_id,
 			interactive=_selectors_interactive(),
@@ -983,24 +974,22 @@ def _finalize_blocked_generation_state(
 async def stream_all_models(
 	user_text: str,
 	system_prompt: str,
-	panel_1_model: str,
-	panel_2_model: str,
-	panel_3_model: str,
-	panel_1_reasoning_effort: str | None = None,
-	panel_2_reasoning_effort: str | None = None,
-	panel_3_reasoning_effort: str | None = None,
+	*panel_inputs: str | None,
 ):
+	"""Run one round. `panel_inputs` holds each panel's model id, then each
+	panel's reasoning effort; efforts are optional."""
 	user_text = (user_text or "").strip()
 	if not user_text:
 		return
 
-	model_ids = [panel_1_model, panel_2_model, panel_3_model]
+	model_ids = list(panel_inputs[:PANEL_COUNT])
+	reasoning_efforts = list(panel_inputs[PANEL_COUNT:])
+	reasoning_efforts += [None] * (PANEL_COUNT - len(reasoning_efforts))
 	message_payload = _build_messages(user_text, system_prompt)
 	display_order = _shuffled_display_order()
 	reasoning_requests = [
-		_prepare_reasoning_request(panel_1_model, panel_1_reasoning_effort),
-		_prepare_reasoning_request(panel_2_model, panel_2_reasoning_effort),
-		_prepare_reasoning_request(panel_3_model, panel_3_reasoning_effort),
+		_prepare_reasoning_request(model_id, effort)
+		for model_id, effort in zip(model_ids, reasoning_efforts)
 	]
 	round_state = _build_round_state(
 		user_text,
@@ -1204,9 +1193,7 @@ def create_demo() -> gr.Blocks:
 	global panel_1_provider
 	global send_btn
 
-	default_panel_providers = [
-		_provider_for_model(model_id) for model_id in DEFAULT_PANEL_MODEL_IDS
-	]
+	interactive = _selectors_interactive()
 	initial_leaderboard_summary, initial_leaderboard_rows = _leaderboard_view_data()
 
 	with gr.Blocks(title="LLM Council Arena") as built_demo:
@@ -1216,60 +1203,33 @@ def create_demo() -> gr.Blocks:
 			with gr.Tab("Arena"):
 				openrouter_status_banner = _openrouter_status_banner()
 
+				panel_providers: list[gr.Dropdown] = []
+				panel_models: list[gr.Dropdown] = []
+				panel_efforts: list[gr.Dropdown] = []
+				panel_cost_hints: list[gr.Markdown] = []
 				with gr.Row():
-					with gr.Column(scale=1):
-						panel_1_provider = gr.Dropdown(
-							label="Provider",
-							choices=PROVIDER_CHOICES,
-							value=default_panel_providers[0],
-							interactive=_selectors_interactive(),
-						)
-						panel_1_model = gr.Dropdown(
-							label="Model",
-							choices=_model_choices_for_provider(default_panel_providers[0]),
-							value=DEFAULT_PANEL_MODEL_IDS[0],
-							interactive=_selectors_interactive(),
-						)
-						(
-							panel_1_reasoning_effort,
-							panel_1_reasoning_cost_hint,
-						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[0])
-
-					with gr.Column(scale=1):
-						panel_2_provider = gr.Dropdown(
-							label="Provider",
-							choices=PROVIDER_CHOICES,
-							value=default_panel_providers[1],
-							interactive=_selectors_interactive(),
-						)
-						panel_2_model = gr.Dropdown(
-							label="Model",
-							choices=_model_choices_for_provider(default_panel_providers[1]),
-							value=DEFAULT_PANEL_MODEL_IDS[1],
-							interactive=_selectors_interactive(),
-						)
-						(
-							panel_2_reasoning_effort,
-							panel_2_reasoning_cost_hint,
-						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[1])
-
-					with gr.Column(scale=1):
-						panel_3_provider = gr.Dropdown(
-							label="Provider",
-							choices=PROVIDER_CHOICES,
-							value=default_panel_providers[2],
-							interactive=_selectors_interactive(),
-						)
-						panel_3_model = gr.Dropdown(
-							label="Model",
-							choices=_model_choices_for_provider(default_panel_providers[2]),
-							value=DEFAULT_PANEL_MODEL_IDS[2],
-							interactive=_selectors_interactive(),
-						)
-						(
-							panel_3_reasoning_effort,
-							panel_3_reasoning_cost_hint,
-						) = _reasoning_controls_for_model(DEFAULT_PANEL_MODEL_IDS[2])
+					for model_id in DEFAULT_PANEL_MODEL_IDS:
+						provider_key = _provider_for_model(model_id)
+						reasoning_config = _reasoning_control_config(model_id)
+						with gr.Column(scale=1):
+							panel_providers.append(
+								gr.Dropdown(
+									label="Provider",
+									choices=PROVIDER_CHOICES,
+									value=provider_key,
+									interactive=interactive,
+								)
+							)
+							panel_models.append(
+								gr.Dropdown(
+									label="Model",
+									choices=_model_choices_for_provider(provider_key),
+									value=model_id,
+									interactive=interactive,
+								)
+							)
+							panel_efforts.append(gr.Dropdown(**reasoning_config["effort"]))
+							panel_cost_hints.append(gr.Markdown(**reasoning_config["cost_hint"]))
 
 				with gr.Accordion("System Prompt", open=False):
 					system_prompt = gr.Textbox(
@@ -1283,23 +1243,24 @@ def create_demo() -> gr.Blocks:
 					placeholder="Type your prompt and click Send...",
 					lines=3,
 				)
-				send_btn = gr.Button("Send", interactive=_selectors_interactive())
+				send_btn = gr.Button("Send", interactive=interactive)
 				round_state = gr.State(_empty_round_state())
 
+				panel_chats: list[gr.Chatbot] = []
 				with gr.Row():
-					with gr.Column(scale=1):
-						panel_1_chat = _chatbot_config(label=_panel_label(0), height=520)
-					with gr.Column(scale=1):
-						panel_2_chat = _chatbot_config(label=_panel_label(1), height=520)
-					with gr.Column(scale=1):
-						panel_3_chat = _chatbot_config(label=_panel_label(2), height=520)
+					for index in range(PANEL_COUNT):
+						with gr.Column(scale=1):
+							panel_chats.append(
+								_chatbot_config(label=_panel_label(index), height=520)
+							)
 
 				with gr.Group():
 					gr.Markdown("## Vote on the Anonymous Responses")
 					with gr.Row():
-						vote_response_a_btn = gr.Button(_panel_label(0), interactive=False)
-						vote_response_b_btn = gr.Button(_panel_label(1), interactive=False)
-						vote_response_c_btn = gr.Button(_panel_label(2), interactive=False)
+						vote_buttons = [
+							gr.Button(_panel_label(index), interactive=False)
+							for index in range(PANEL_COUNT)
+						]
 					with gr.Row():
 						vote_reset_btn = gr.Button("Reset Vote", interactive=False)
 						vote_submit_btn = gr.Button("Submit Vote", interactive=False)
@@ -1314,220 +1275,49 @@ def create_demo() -> gr.Blocks:
 					wrap=True,
 				)
 
-		submit_outputs = [
-			user_input,
-			panel_1_chat,
-			panel_2_chat,
-			panel_3_chat,
-			round_state,
-			vote_response_a_btn,
-			vote_response_b_btn,
-			vote_response_c_btn,
-			vote_reset_btn,
-			vote_submit_btn,
-			vote_status_banner,
-		]
-		submit_inputs = [
-			user_input,
-			system_prompt,
-			panel_1_model,
-			panel_2_model,
-			panel_3_model,
-			panel_1_reasoning_effort,
-			panel_2_reasoning_effort,
-			panel_3_reasoning_effort,
-		]
+		# Shared output groups; order matches _vote_ui_updates() and _reset_arena_outputs().
+		vote_controls = [*vote_buttons, vote_reset_btn, vote_submit_btn, vote_status_banner]
+		arena_reset_outputs = [*panel_chats, round_state, *vote_controls]
 
-		panel_1_provider.change(
-			fn=update_panel_provider,
-			inputs=[panel_1_provider],
-			outputs=[
-				panel_1_model,
-				panel_1_reasoning_effort,
-				panel_1_reasoning_cost_hint,
-				panel_1_chat,
-				panel_2_chat,
-				panel_3_chat,
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
-		panel_2_provider.change(
-			fn=update_panel_provider,
-			inputs=[panel_2_provider],
-			outputs=[
-				panel_2_model,
-				panel_2_reasoning_effort,
-				panel_2_reasoning_cost_hint,
-				panel_1_chat,
-				panel_2_chat,
-				panel_3_chat,
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
-		panel_3_provider.change(
-			fn=update_panel_provider,
-			inputs=[panel_3_provider],
-			outputs=[
-				panel_3_model,
-				panel_3_reasoning_effort,
-				panel_3_reasoning_cost_hint,
-				panel_1_chat,
-				panel_2_chat,
-				panel_3_chat,
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
+		for provider, model, effort, cost_hint in zip(
+			panel_providers, panel_models, panel_efforts, panel_cost_hints
+		):
+			provider.change(
+				fn=update_panel_provider,
+				inputs=[provider],
+				outputs=[model, effort, cost_hint, *arena_reset_outputs],
+			)
+			model.change(
+				fn=update_panel_model,
+				inputs=[model],
+				outputs=[effort, cost_hint, *arena_reset_outputs],
+			)
 
-		panel_1_model.change(
-			fn=update_panel_model,
-			inputs=[panel_1_model],
-			outputs=[
-				panel_1_reasoning_effort,
-				panel_1_reasoning_cost_hint,
-				panel_1_chat,
-				panel_2_chat,
-				panel_3_chat,
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
-		panel_2_model.change(
-			fn=update_panel_model,
-			inputs=[panel_2_model],
-			outputs=[
-				panel_2_reasoning_effort,
-				panel_2_reasoning_cost_hint,
-				panel_1_chat,
-				panel_2_chat,
-				panel_3_chat,
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
-		panel_3_model.change(
-			fn=update_panel_model,
-			inputs=[panel_3_model],
-			outputs=[
-				panel_3_reasoning_effort,
-				panel_3_reasoning_cost_hint,
-				panel_1_chat,
-				panel_2_chat,
-				panel_3_chat,
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
-		user_input.submit(
+		gr.on(
+			triggers=[user_input.submit, send_btn.click],
 			fn=stream_all_models,
-			inputs=submit_inputs,
-			outputs=submit_outputs,
+			inputs=[user_input, system_prompt, *panel_models, *panel_efforts],
+			outputs=[user_input, *panel_chats, round_state, *vote_controls],
 			show_progress="hidden",
 		)
-		send_btn.click(
-			fn=stream_all_models,
-			inputs=submit_inputs,
-			outputs=submit_outputs,
-			show_progress="hidden",
-		)
-		vote_response_a_btn.click(
-			fn=vote_response_a,
-			inputs=[round_state],
-			outputs=[
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
-		vote_response_b_btn.click(
-			fn=vote_response_b,
-			inputs=[round_state],
-			outputs=[
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
-		vote_response_c_btn.click(
-			fn=vote_response_c,
-			inputs=[round_state],
-			outputs=[
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
-		)
+		for index, vote_button in enumerate(vote_buttons):
+			vote_button.click(
+				fn=partial(vote_response, display_index=index),
+				inputs=[round_state],
+				outputs=[round_state, *vote_controls],
+			)
 		vote_reset_btn.click(
 			fn=reset_vote,
 			inputs=[round_state],
-			outputs=[
-				round_state,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
-			],
+			outputs=[round_state, *vote_controls],
 		)
 		vote_submit_btn.click(
 			fn=submit_vote,
 			inputs=[round_state],
 			outputs=[
 				round_state,
-				panel_1_chat,
-				panel_2_chat,
-				panel_3_chat,
-				vote_response_a_btn,
-				vote_response_b_btn,
-				vote_response_c_btn,
-				vote_reset_btn,
-				vote_submit_btn,
-				vote_status_banner,
+				*panel_chats,
+				*vote_controls,
 				leaderboard_summary_md,
 				leaderboard_table,
 			],
@@ -1538,5 +1328,7 @@ def create_demo() -> gr.Blocks:
 			outputs=[leaderboard_summary_md, leaderboard_table],
 		)
 
+	panel_1_provider = panel_providers[0]
+	panel_1_model = panel_models[0]
 	demo = built_demo
 	return built_demo

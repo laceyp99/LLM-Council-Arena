@@ -79,20 +79,11 @@ def test_update_panel_provider_resolves_model_choices_and_resets_outputs(monkeyp
 	)
 	monkeypatch.setattr(app_module, "_reset_arena_outputs", lambda: reset_outputs)
 	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
-	monkeypatch.setattr(
-		app_module.gr,
-		"Dropdown",
-		lambda **kwargs: {
-			"choices": kwargs["choices"],
-			"value": kwargs["value"],
-			"interactive": kwargs["interactive"],
-		},
-	)
 
 	outputs = app_module.update_panel_provider("beta")
 
 	assert outputs == (
-		{"choices": [("Two", "beta/two")], "value": "beta/two", "interactive": True},
+		app_module.gr.update(choices=[("Two", "beta/two")], value="beta/two", interactive=True),
 		"reasoning-effort",
 		"reasoning-cost-hint",
 		*reset_outputs,
