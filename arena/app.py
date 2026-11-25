@@ -58,7 +58,6 @@ from arena.state.voting import (
 )
 from arena.ui.config import (
 	APP_DIR,
-	APP_ICON_PATH,
 	DEFAULT_MODEL_IDS,
 	DEFAULT_SYSTEM_PROMPT,
 	LOGS_DIR,
@@ -326,14 +325,6 @@ def _append_vote_record_unlocked(record: dict[str, Any]) -> None:
 
 	existing_records.append(record)
 	_write_json_file(VOTES_FILE, existing_records)
-
-
-def _remove_vote_record(round_id: str | None) -> None:
-	if not round_id or not VOTES_FILE.exists():
-		return
-
-	with _json_file_lock(VOTES_FILE):
-		_remove_vote_record_unlocked(round_id)
 
 
 def _remove_vote_record_unlocked(round_id: str) -> None:
@@ -1202,11 +1193,6 @@ async def stream_all_models(
 	)
 
 
-def clear_histories(panel_1_model: str, panel_2_model: str, panel_3_model: str):
-	_ = (panel_1_model, panel_2_model, panel_3_model)
-	return "", *_reset_arena_outputs()
-
-
 def create_demo() -> gr.Blocks:
 	global demo
 	global openrouter_status_banner
@@ -1550,9 +1536,3 @@ def create_demo() -> gr.Blocks:
 
 	demo = built_demo
 	return built_demo
-
-
-if __name__ == "__main__":
-	_bootstrap_persistence()
-	initialize_model_catalog()
-	create_demo().queue().launch(favicon_path=APP_ICON_PATH)

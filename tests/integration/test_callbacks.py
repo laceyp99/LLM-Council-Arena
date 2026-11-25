@@ -206,26 +206,6 @@ def test_reasoning_control_updates_hide_budget_only_models(monkeypatch) -> None:
 	assert cost_hint["visible"] is False
 
 
-def test_clear_histories_clears_user_input_and_resets_outputs(monkeypatch) -> None:
-	reset_outputs = (
-		"chat-1",
-		"chat-2",
-		"chat-3",
-		"round-state",
-		"vote-a",
-		"vote-b",
-		"vote-c",
-		"vote-reset",
-		"vote-submit",
-	)
-	monkeypatch.setattr(app_module, "_reset_arena_outputs", lambda: reset_outputs)
-
-	assert app_module.clear_histories("alpha/one", "beta/two", "gamma/three") == (
-		"",
-		*reset_outputs,
-	)
-
-
 def test_submit_vote_outputs_uses_round_histories_and_leaderboard(monkeypatch) -> None:
 	captured: dict[str, object] = {}
 	round_state = _build_completed_round_state(

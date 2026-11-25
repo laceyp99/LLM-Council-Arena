@@ -3,9 +3,7 @@ from typing import Any
 import gradio as gr
 
 from arena.state.round import (
-	_default_display_order,
 	_display_order_from_state,
-	_empty_round_state,
 	_panel_label,
 	_slot_logs_from_state,
 )
@@ -329,6 +327,10 @@ def _targeted_chatbot_value_updates(
 	return tuple(updates)
 
 
+def _skip_chatbot_updates() -> tuple[Any, Any, Any]:
+	return tuple(gr.skip() for _ in range(PANEL_COUNT))
+
+
 def _skip_vote_updates() -> tuple[Any, Any, Any, Any, Any, Any]:
 	return tuple(gr.skip() for _ in range(6))
 
@@ -342,11 +344,7 @@ def _streaming_outputs(
 ) -> tuple[Any, ...]:
 	return (
 		gr.skip() if user_input is None else user_input,
-		*(
-			chatbot_updates
-			if chatbot_updates is not None
-			else _targeted_chatbot_value_updates([], _default_display_order())
-		),
+		*(chatbot_updates if chatbot_updates is not None else _skip_chatbot_updates()),
 		round_state if round_state is not None else gr.skip(),
 		*(vote_updates if vote_updates is not None else _skip_vote_updates()),
 	)
@@ -431,7 +429,3 @@ def _leaderboard_summary(total_rounds: Any, leaderboard_rows: list[list[Any]]) -
 		f"{rounds} submitted {rounds_label} across {row_count} ranked {models_label}. "
 		"Sorted by total wins."
 	)
-
-
-def _empty_display_state() -> dict[str, Any]:
-	return _empty_round_state()
