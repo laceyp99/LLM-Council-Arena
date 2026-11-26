@@ -83,11 +83,10 @@ class _NoopAsyncClient:
 
 
 class _CapturedStreamResponse:
+	is_error = False
+
 	def __init__(self, model: str) -> None:
 		self.model = model
-
-	def raise_for_status(self) -> None:
-		return None
 
 	async def aiter_lines(self):
 		yield "data: " + json.dumps(
@@ -741,7 +740,7 @@ async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(mon
 
 
 @pytest.mark.anyio
-async def test_stream_all_models_recovers_from_background_stream_failure(monkeypatch) -> None:
+async def test_stream_all_models_reports_stream_failure_per_slot(monkeypatch) -> None:
 	_stub_ui_helpers(monkeypatch)
 	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
 	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
@@ -772,8 +771,5 @@ async def test_stream_all_models_recovers_from_background_stream_failure(monkeyp
 		if message.get("metadata", {}).get("title") == "Generation Error"
 	]
 	assert len(error_messages) == 1
-	assert error_messages[0]["content"].startswith("[Error] Generation stopped")
-	assert (
-		final_round_state["slot_logs"][0]["error"]
-		== "Generation stopped before this round could finish."
-	)
+	assert error_messages[0]["content"] == "[Error] producer exploded"
+	assert final_round_state["slot_logs"][0]["error"] == "producer exploded"

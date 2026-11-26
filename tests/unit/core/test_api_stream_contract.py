@@ -5,19 +5,16 @@ from arena.core import api as api_module
 
 
 class _FakeStreamResponse:
-	def __init__(self, lines: list[str], *, status_error: Exception | None = None) -> None:
+	is_error = False
+
+	def __init__(self, lines: list[str]) -> None:
 		self._lines = lines
-		self._status_error = status_error
 
 	async def __aenter__(self):
 		return self
 
 	async def __aexit__(self, exc_type, exc, tb) -> None:
 		return None
-
-	def raise_for_status(self) -> None:
-		if self._status_error is not None:
-			raise self._status_error
 
 	async def aiter_lines(self):
 		for line in self._lines:
@@ -192,53 +189,68 @@ async def test_prompt_model_stops_after_provider_error_payload(monkeypatch) -> N
 
 
 @pytest.mark.anyio
-async def test_prompt_model_yields_error_for_http_failure(monkeypatch) -> None:
-	response = _FakeStreamResponse(
-		[], status_error=httpx.HTTPStatusError("bad gateway", request=None, response=None)
+async def test_prompt_model_reports_http_error_body() -> None:
+	transport = httpx.MockTransport(
+		lambda request: httpx.Response(
+			402, json={"error": {"code": 402, "message": "Insufficient credits"}}
+		)
 	)
-	client = _FakeAsyncClient(response)
+	api = api_module.OpenRouterAPI(api_key="test-api-key")
+
+	async with httpx.AsyncClient(transport=transport) as client:
+		chunks = [
+			chunk
+			async for chunk in api._prompt_model(
+				client,
+				{"slot": 2, "model": "beta/two"},
+				[{"role": "user", "content": "Compare models."}],
+			)
+		]
+
+	assert chunks == [
+		{
+			"event": "error",
+			"slot": 2,
+			"model": "beta/two",
+			"error": "HTTP 402 Payment Required: Insufficient credits",
+			"response": {"error": {"code": 402, "message": "Insufficient credits"}},
+		}
+	]
+
+
+async def _prompt_model_failing_on_slot_zero(self, client, request, messages, **kwargs):
+	yield {"slot": request["slot"], "model": request["model"], "delta": "first chunk"}
+	if request["slot"] == 0:
+		raise RuntimeError("producer exploded")
+	yield {"event": "complete", "slot": request["slot"], "model": request["model"]}
+
+
+@pytest.mark.anyio
+async def test_prompt_models_concurrent_reports_failure_and_keeps_sibling_chunks(
+	monkeypatch,
+) -> None:
+	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
+	monkeypatch.setattr(
+		api_module.OpenRouterAPI, "_prompt_model", _prompt_model_failing_on_slot_zero
+	)
 	api = api_module.OpenRouterAPI(api_key="test-api-key")
 
 	chunks = [
 		chunk
-		async for chunk in api._prompt_model(
-			client,
-			{"slot": 2, "model": "beta/two"},
+		async for chunk in api.prompt_models_concurrent(
+			["alpha/one", "beta/two"],
 			[{"role": "user", "content": "Compare models."}],
 		)
 	]
 
-	assert chunks == [{"slot": 2, "model": "beta/two", "error": "bad gateway"}]
+	def chunks_for(slot: int) -> list[dict]:
+		return [chunk for chunk in chunks if chunk["slot"] == slot]
 
-
-async def _failing_prompt_model(self, client, request, messages, **kwargs):
-	yield {
-		"slot": request["slot"],
-		"model": request["model"],
-		"delta": "first chunk",
-	}
-	raise RuntimeError("producer exploded")
-
-
-@pytest.mark.anyio
-async def test_prompt_models_concurrent_surfaces_background_task_failure(monkeypatch) -> None:
-	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
-	monkeypatch.setattr(api_module.OpenRouterAPI, "_prompt_model", _failing_prompt_model)
-
-	api = api_module.OpenRouterAPI(api_key="test-api-key")
-	chunks: list[dict[str, object]] = []
-
-	with pytest.raises(RuntimeError, match="producer exploded"):
-		async for chunk in api.prompt_models_concurrent(
-			["alpha/one"],
-			[{"role": "user", "content": "Compare models."}],
-		):
-			chunks.append(chunk)
-
-	assert chunks == [
-		{
-			"slot": 0,
-			"model": "alpha/one",
-			"delta": "first chunk",
-		}
+	assert chunks_for(0) == [
+		{"slot": 0, "model": "alpha/one", "delta": "first chunk"},
+		{"event": "error", "slot": 0, "model": "alpha/one", "error": "producer exploded"},
+	]
+	assert chunks_for(1) == [
+		{"slot": 1, "model": "beta/two", "delta": "first chunk"},
+		{"event": "complete", "slot": 1, "model": "beta/two"},
 	]
