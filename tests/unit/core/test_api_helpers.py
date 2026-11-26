@@ -206,6 +206,21 @@ def test_reasoning_cost_hint_formats_prompt_completion_and_reasoning_prices() ->
 	assert reasoning_cost_hint(capabilities) == ("input $1/M; output $2/M; reasoning $3/M")
 
 
+def test_reasoning_cost_hint_omits_reasoning_price_matching_output() -> None:
+	capabilities = reasoning_capabilities_for_model(
+		{
+			"supported_parameters": ["reasoning"],
+			"pricing": {
+				"prompt": "0.000001",
+				"completion": "0.000004",
+				"internal_reasoning": "0.0000040",
+			},
+		}
+	)
+
+	assert reasoning_cost_hint(capabilities) == "input $1/M; output $4/M"
+
+
 def test_reasoning_cost_hint_uses_output_note_without_internal_reasoning_price() -> None:
 	capabilities = reasoning_capabilities_for_model(
 		{

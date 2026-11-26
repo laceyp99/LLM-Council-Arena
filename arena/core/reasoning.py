@@ -58,16 +58,18 @@ def reasoning_cost_hint(capabilities: dict[str, Any]) -> str:
 		return ""
 
 	pricing = _as_dict(capabilities.get("pricing"))
-	parts = []
-	for label, key in (
-		("input", "prompt"),
-		("output", "completion"),
-		("reasoning", "internal_reasoning"),
-	):
-		price = _price_per_million_tokens(pricing.get(key))
-		if price:
-			parts.append(f"{label} {price}")
-	return "; ".join(parts)
+	prices = {
+		label: _price_per_million_tokens(pricing.get(key))
+		for label, key in (
+			("input", "prompt"),
+			("output", "completion"),
+			("reasoning", "internal_reasoning"),
+		)
+	}
+	# Most models bill reasoning tokens at the output rate, so a matching price adds nothing.
+	if prices["reasoning"] == prices["output"]:
+		prices["reasoning"] = None
+	return "; ".join(f"{label} {price}" for label, price in prices.items() if price)
 
 
 def reasoning_capabilities_for_model(model: dict[str, Any]) -> dict[str, Any]:
