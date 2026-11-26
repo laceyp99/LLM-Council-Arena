@@ -119,7 +119,7 @@ def test_main_entrypoint_launches_demo(monkeypatch) -> None:
 			launch_calls.append("queue")
 			return FakeQueuedDemo()
 
-	monkeypatch.setattr(main_module, "_bootstrap_persistence", fake_bootstrap_persistence)
+	monkeypatch.setattr(main_module, "bootstrap_persistence", fake_bootstrap_persistence)
 	monkeypatch.setattr(main_module, "initialize_model_catalog", fake_initialize_model_catalog)
 	monkeypatch.setattr(main_module, "create_demo", lambda: SimpleNamespace(blocks=FakeBlocks()))
 

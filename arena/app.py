@@ -277,7 +277,7 @@ def _ensure_log_store_unlocked() -> None:
 		_write_json_file(META_LOG_FILE, _empty_meta_log())
 
 
-def _bootstrap_persistence() -> None:
+def bootstrap_persistence() -> None:
 	_ensure_votes_file()
 	_ensure_log_store()
 
