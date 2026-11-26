@@ -106,7 +106,7 @@ arena/
   ui/                      # Display helpers and app configuration
 tests/                     # Unit tests for package behavior
 arena_logs/                # Generated runtime logs
-votes.json                 # Generated vote history
+votes.jsonl                # Generated vote history
 ```
 
 ## Degraded mode without an API key
@@ -119,8 +119,8 @@ This is intentional behavior in the current codebase.
 
 The app writes local JSON artifacts during use:
 
-- `votes.json`: accumulated vote history stored as a JSON array
-- `arena_logs/meta.json`: aggregate leaderboard and round summary data
+- `votes.jsonl`: vote history, one JSON record per line. On first start, an existing `votes.json` array is copied into it and left in place.
+- `arena_logs/meta.json`: aggregate leaderboard totals
 - `arena_logs/sessions/<timestamp>_<round_id>/round.json`: round metadata
 - `arena_logs/sessions/<timestamp>_<round_id>/generation.json`: generation output, errors, applied reasoning payloads, token/cost stats, and reasoning details
 - `arena_logs/sessions/<timestamp>_<round_id>/histories.json`: serialized chat histories per panel

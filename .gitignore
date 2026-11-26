@@ -30,5 +30,8 @@ dist/
 # Runtime-generated app data
 arena_logs/
 votes.json
+votes.jsonl
 *.json.lock
 *.json.*.tmp
+*.jsonl.lock
+*.jsonl.*.tmp

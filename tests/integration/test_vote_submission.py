@@ -1,8 +1,15 @@
+import json
 from datetime import datetime, timezone
 
 import gradio as gr
 
 from arena import app as app_module
+
+
+def _read_votes() -> list[dict[str, object]]:
+	return [
+		json.loads(line) for line in app_module.VOTES_FILE.read_text(encoding="utf-8").splitlines()
+	]
 
 
 def _stub_chatbot_updates(monkeypatch) -> None:
@@ -20,7 +27,7 @@ def _patch_log_paths(monkeypatch, tmp_path) -> None:
 	monkeypatch.setattr(app_module, "LOGS_DIR", logs_dir)
 	monkeypatch.setattr(app_module, "SESSION_LOGS_DIR", session_logs_dir)
 	monkeypatch.setattr(app_module, "META_LOG_FILE", logs_dir / "meta.json")
-	monkeypatch.setattr(app_module, "VOTES_FILE", tmp_path / "votes.json")
+	monkeypatch.setattr(app_module, "VOTES_FILE", tmp_path / "votes.jsonl")
 
 
 def _build_votable_round_state() -> dict[str, object]:
@@ -72,7 +79,7 @@ def test_submit_vote_writes_round_artifacts_and_vote_record(monkeypatch, tmp_pat
 	outputs = app_module.submit_vote(round_state)
 	submitted_state = outputs[0]
 	status_update = outputs[9]
-	votes = app_module._read_json_file(app_module.VOTES_FILE, list, [])
+	votes = _read_votes()
 	session_dir = tmp_path / str(submitted_state["session_dir"])
 	meta_log = app_module._read_json_file(app_module.META_LOG_FILE, dict, {})
 
@@ -192,12 +199,13 @@ def test_submit_vote_records_log_warning_when_vote_append_fails(monkeypatch, tmp
 
 	retry_outputs = app_module.submit_vote(submitted_state)
 	retry_state = retry_outputs[0]
-	votes = app_module._read_json_file(app_module.VOTES_FILE, list, [])
+	votes = _read_votes()
 	meta_log = app_module._read_json_file(app_module.META_LOG_FILE, dict, {})
 
 	assert retry_state["submitted"] is True
 	assert retry_state["submission_status"] == "success"
 	assert retry_state["session_dir"] is not None
+	assert len(votes) == 1
 	assert votes[0]["round_id"] == retry_state["round_id"]
 	assert meta_log["total_rounds"] == 1
 	assert (tmp_path / str(retry_state["session_dir"]) / "round.json").exists()
@@ -212,7 +220,7 @@ def test_submit_vote_reports_file_lock_timeout(monkeypatch, tmp_path) -> None:
 		app_module,
 		"_lock_file",
 		lambda *args, **kwargs: (_ for _ in ()).throw(
-			RuntimeError("Timed out waiting for file lock: votes.json.lock")
+			RuntimeError("Timed out waiting for file lock: votes.jsonl.lock")
 		),
 	)
 
@@ -223,7 +231,7 @@ def test_submit_vote_reports_file_lock_timeout(monkeypatch, tmp_path) -> None:
 	assert submitted_state["submitted"] is False
 	assert submitted_state["submission_status"] == "error"
 	assert submitted_state["submission_message"] == (
-		"Vote could not be saved: Timed out waiting for file lock: votes.json.lock"
+		"Vote could not be saved: Timed out waiting for file lock: votes.jsonl.lock"
 	)
 	assert "Timed out waiting for file lock" in status_update.value
 	assert not app_module.VOTES_FILE.exists()
@@ -260,6 +268,24 @@ def test_submit_vote_rolls_back_vote_record_when_round_log_write_fails(
 	assert not app_module.VOTES_FILE.exists()
 	assert list(app_module.SESSION_LOGS_DIR.glob("*")) == []
 	assert app_module._read_json_file(app_module.META_LOG_FILE, dict, {})["total_rounds"] == 0
+
+
+def test_submit_vote_failure_leaves_existing_votes_file_unchanged(monkeypatch, tmp_path) -> None:
+	_stub_chatbot_updates(monkeypatch)
+	_patch_log_paths(monkeypatch, tmp_path)
+	app_module.submit_vote(_build_votable_round_state())
+	votes_before = app_module.VOTES_FILE.read_bytes()
+	monkeypatch.setattr(
+		app_module,
+		"_update_meta_log_unlocked",
+		lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("meta store unavailable")),
+	)
+
+	outputs = app_module.submit_vote(_build_votable_round_state())
+
+	assert outputs[0]["submission_status"] == "error"
+	assert app_module.VOTES_FILE.read_bytes() == votes_before
+	assert len(list(app_module.SESSION_LOGS_DIR.glob("*"))) == 1
 
 
 def test_submit_vote_returns_existing_submission_without_rewriting(monkeypatch, tmp_path) -> None:
