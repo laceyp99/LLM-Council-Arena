@@ -4,10 +4,10 @@ from typing import Any
 import gradio as gr
 
 from arena.state.round import (
-	_display_order_from_state,
-	_empty_round_state,
-	_panel_label,
-	_slot_logs_from_state,
+	display_order_from_state,
+	empty_round_state,
+	panel_label,
+	slot_logs_from_state,
 )
 from arena.ui.config import ANONYMOUS_PANEL_LABELS
 
@@ -19,7 +19,7 @@ def _choice_to_display_index(choice: str) -> int | None:
 		return None
 
 
-def _ranking_choices_from_state(
+def ranking_choices_from_state(
 	round_state: dict[str, Any] | None,
 ) -> tuple[str | None, str | None, str | None]:
 	if not isinstance(round_state, dict):
@@ -33,14 +33,14 @@ def _ranking_choices_from_state(
 
 
 def _remaining_vote_choices(round_state: dict[str, Any] | None) -> list[str]:
-	first_choice, second_choice, _ = _ranking_choices_from_state(round_state)
+	first_choice, second_choice, _ = ranking_choices_from_state(round_state)
 	blocked = {choice for choice in (first_choice, second_choice) if choice}
 	return [label for label in ANONYMOUS_PANEL_LABELS if label not in blocked]
 
 
-def _display_mapping_from_state(round_state: dict[str, Any]) -> list[dict[str, Any]]:
-	display_order = _display_order_from_state(round_state)
-	slot_logs = _slot_logs_from_state(round_state)
+def display_mapping_from_state(round_state: dict[str, Any]) -> list[dict[str, Any]]:
+	display_order = display_order_from_state(round_state)
+	slot_logs = slot_logs_from_state(round_state)
 	mapping: list[dict[str, Any]] = []
 
 	for display_index, slot in enumerate(display_order):
@@ -49,7 +49,7 @@ def _display_mapping_from_state(round_state: dict[str, Any]) -> list[dict[str, A
 		slot_log = slot_logs[slot]
 		mapping.append(
 			{
-				"response_label": _panel_label(display_index),
+				"response_label": panel_label(display_index),
 				"selection_slot": slot,
 				"model_id": slot_log.get("model_id") or "",
 				"model_label": slot_log.get("model_label") or "",
@@ -60,12 +60,12 @@ def _display_mapping_from_state(round_state: dict[str, Any]) -> list[dict[str, A
 	return mapping
 
 
-def _ranking_details_from_state(round_state: dict[str, Any]) -> list[dict[str, Any]]:
-	display_order = _display_order_from_state(round_state)
-	slot_logs = _slot_logs_from_state(round_state)
+def ranking_details_from_state(round_state: dict[str, Any]) -> list[dict[str, Any]]:
+	display_order = display_order_from_state(round_state)
+	slot_logs = slot_logs_from_state(round_state)
 	ranking_details: list[dict[str, Any]] = []
 
-	for rank_index, choice in enumerate(_ranking_choices_from_state(round_state), start=1):
+	for rank_index, choice in enumerate(ranking_choices_from_state(round_state), start=1):
 		if not choice:
 			continue
 		display_index = _choice_to_display_index(choice)
@@ -90,7 +90,7 @@ def _ranking_details_from_state(round_state: dict[str, Any]) -> list[dict[str, A
 
 
 def _vote_button_text(label: str, round_state: dict[str, Any] | None) -> str:
-	first_choice, second_choice, third_choice = _ranking_choices_from_state(round_state)
+	first_choice, second_choice, third_choice = ranking_choices_from_state(round_state)
 	if label == first_choice:
 		return f"{label} - 1st"
 	if label == second_choice:
@@ -103,8 +103,8 @@ def _vote_button_text(label: str, round_state: dict[str, Any] | None) -> str:
 def _vote_controls_updates(
 	round_state: dict[str, Any] | None,
 ) -> tuple[gr.Button, gr.Button, gr.Button, gr.Button, gr.Button]:
-	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
-	first_choice, second_choice, third_choice = _ranking_choices_from_state(current_state)
+	current_state = round_state if isinstance(round_state, dict) else empty_round_state()
+	first_choice, second_choice, third_choice = ranking_choices_from_state(current_state)
 	remaining_choices = set(_remaining_vote_choices(current_state))
 	ready_for_vote = bool(current_state.get("ready_for_vote"))
 	submitted = bool(current_state.get("submitted"))
@@ -135,7 +135,7 @@ def _vote_controls_updates(
 
 
 def _submission_status_update(round_state: dict[str, Any] | None) -> gr.HTML:
-	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
+	current_state = round_state if isinstance(round_state, dict) else empty_round_state()
 	status = str(current_state.get("submission_status") or "").strip()
 	message = str(current_state.get("submission_message") or "").strip()
 	if not message:
@@ -156,15 +156,15 @@ def _submission_status_update(round_state: dict[str, Any] | None) -> gr.HTML:
 	)
 
 
-def _vote_ui_updates(
+def vote_ui_updates(
 	round_state: dict[str, Any] | None,
 ) -> Any:
-	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
+	current_state = round_state if isinstance(round_state, dict) else empty_round_state()
 	return (*_vote_controls_updates(current_state), _submission_status_update(current_state))
 
 
 def _vote_response(round_state: dict[str, Any] | None, response_label: str):
-	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
+	current_state = round_state if isinstance(round_state, dict) else empty_round_state()
 
 	if not current_state.get("round_id"):
 		return current_state
@@ -175,7 +175,7 @@ def _vote_response(round_state: dict[str, Any] | None, response_label: str):
 	if response_label not in ANONYMOUS_PANEL_LABELS:
 		return current_state
 
-	first_choice, second_choice, _ = _ranking_choices_from_state(current_state)
+	first_choice, second_choice, _ = ranking_choices_from_state(current_state)
 	if first_choice is None:
 		updated_state = {
 			**current_state,
@@ -209,18 +209,18 @@ def _vote_response(round_state: dict[str, Any] | None, response_label: str):
 
 
 def vote_response(round_state: dict[str, Any] | None, display_index: int):
-	updated_state = _vote_response(round_state, _panel_label(display_index))
-	return updated_state, *_vote_ui_updates(updated_state)
+	updated_state = _vote_response(round_state, panel_label(display_index))
+	return updated_state, *vote_ui_updates(updated_state)
 
 
 def reset_vote(round_state: dict[str, Any] | None):
-	current_state = round_state if isinstance(round_state, dict) else _empty_round_state()
+	current_state = round_state if isinstance(round_state, dict) else empty_round_state()
 	if not current_state.get("round_id"):
-		return current_state, *_vote_ui_updates(current_state)
+		return current_state, *vote_ui_updates(current_state)
 	if current_state.get("submitted"):
-		return current_state, *_vote_ui_updates(current_state)
+		return current_state, *vote_ui_updates(current_state)
 	if not current_state.get("ready_for_vote"):
-		return current_state, *_vote_ui_updates(current_state)
+		return current_state, *vote_ui_updates(current_state)
 
 	updated_state = {
 		**current_state,
@@ -232,4 +232,4 @@ def reset_vote(round_state: dict[str, Any] | None):
 		"submission_status": None,
 		"submission_message": None,
 	}
-	return updated_state, *_vote_ui_updates(updated_state)
+	return updated_state, *vote_ui_updates(updated_state)

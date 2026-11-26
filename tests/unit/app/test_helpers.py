@@ -218,9 +218,9 @@ def test_bootstrap_migrates_legacy_votes_json_once(monkeypatch, tmp_path: Path) 
 	monkeypatch.setattr(app_module, "META_LOG_FILE", logs_dir / "meta.json")
 	monkeypatch.setattr(app_module, "VOTES_FILE", votes_file)
 
-	app_module._bootstrap_persistence()
+	app_module.bootstrap_persistence()
 	app_module._append_vote_record({"round_id": "new-1"})
-	app_module._bootstrap_persistence()
+	app_module.bootstrap_persistence()
 
 	assert _read_jsonl(votes_file) == [*legacy_records, {"round_id": "new-1"}]
 	assert legacy_votes_file.read_bytes() == legacy_bytes
@@ -237,7 +237,7 @@ def test_bootstrap_rejects_invalid_legacy_votes_json(monkeypatch, tmp_path: Path
 	monkeypatch.setattr(app_module, "VOTES_FILE", votes_file)
 
 	try:
-		app_module._bootstrap_persistence()
+		app_module.bootstrap_persistence()
 		assert False, "Expected RuntimeError for an invalid legacy votes file"
 	except RuntimeError as exc:
 		assert "votes.json is not valid JSON" in str(exc)

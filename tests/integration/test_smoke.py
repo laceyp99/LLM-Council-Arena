@@ -5,6 +5,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _startup_selector_config(
@@ -22,7 +23,7 @@ def _startup_selector_config(
 
 		import arena.core.models as model_module
 
-		model_module._load_model_catalog = lambda site_url, site_name: (
+		model_module.load_model_catalog = lambda site_url, site_name: model_module.CatalogState(
 			[
 				{
 					"model_id": "alpha/one",
@@ -53,16 +54,17 @@ def _startup_selector_config(
 
 		app_module = importlib.import_module("arena.app")
 		app_module.initialize_model_catalog()
-		app_module.create_demo()
+		arena_demo = app_module.create_demo()
+		banner_config = arena_demo.status_banner.get_config()
 		print(
 			json.dumps(
 				{
-					"status": app_module.MODEL_CATALOG_STATUS,
-					"provider_interactive": app_module.panel_1_provider.get_config().get("interactive"),
-					"model_interactive": app_module.panel_1_model.get_config().get("interactive"),
-					"send_interactive": app_module.send_btn.get_config().get("interactive"),
-					"readiness_banner_visible": app_module.openrouter_status_banner.get_config().get("visible"),
-					"readiness_banner_value": app_module.openrouter_status_banner.get_config().get("value"),
+					"status": app_module.CATALOG.status,
+					"provider_interactive": arena_demo.panel_providers[0].get_config().get("interactive"),
+					"model_interactive": arena_demo.panel_models[0].get_config().get("interactive"),
+					"send_interactive": arena_demo.send_button.get_config().get("interactive"),
+					"readiness_banner_visible": banner_config.get("visible"),
+					"readiness_banner_value": banner_config.get("value"),
 				},
 				default=str,
 			)
@@ -112,14 +114,14 @@ def test_main_entrypoint_launches_demo(monkeypatch) -> None:
 			assert kwargs["favicon_path"] == main_module.APP_ICON_PATH
 			launch_calls.append("launch")
 
-	class FakeDemo:
+	class FakeBlocks:
 		def queue(self) -> FakeQueuedDemo:
 			launch_calls.append("queue")
 			return FakeQueuedDemo()
 
-	monkeypatch.setattr(main_module, "_bootstrap_persistence", fake_bootstrap_persistence)
+	monkeypatch.setattr(main_module, "bootstrap_persistence", fake_bootstrap_persistence)
 	monkeypatch.setattr(main_module, "initialize_model_catalog", fake_initialize_model_catalog)
-	monkeypatch.setattr(main_module, "create_demo", lambda: FakeDemo())
+	monkeypatch.setattr(main_module, "create_demo", lambda: SimpleNamespace(blocks=FakeBlocks()))
 
 	main_module.main()
 

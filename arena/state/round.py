@@ -7,23 +7,23 @@ from uuid import uuid4
 from arena.ui.config import ANONYMOUS_PANEL_LABELS, DEFAULT_SYSTEM_PROMPT, PANEL_COUNT
 
 
-def _default_display_order() -> list[int]:
+def default_display_order() -> list[int]:
 	return list(range(PANEL_COUNT))
 
 
-def _shuffled_display_order() -> list[int]:
+def shuffled_display_order() -> list[int]:
 	return random.sample(range(PANEL_COUNT), k=PANEL_COUNT)
 
 
-def _panel_label(display_index: int) -> str:
+def panel_label(display_index: int) -> str:
 	return ANONYMOUS_PANEL_LABELS[display_index]
 
 
 def _display_label_for_slot(slot: int, display_order: list[int]) -> str:
 	for display_index, mapped_slot in enumerate(display_order):
 		if mapped_slot == slot:
-			return _panel_label(display_index)
-	return _panel_label(slot)
+			return panel_label(display_index)
+	return panel_label(slot)
 
 
 def _empty_slot_log(
@@ -73,7 +73,7 @@ def _build_slot_logs(
 	]
 
 
-def _empty_round_state() -> dict[str, Any]:
+def empty_round_state() -> dict[str, Any]:
 	return {
 		"round_id": None,
 		"created_at": None,
@@ -84,7 +84,7 @@ def _empty_round_state() -> dict[str, Any]:
 		"system_prompt": DEFAULT_SYSTEM_PROMPT,
 		"messages_payload": [],
 		"model_ids": [],
-		"display_order": _default_display_order(),
+		"display_order": default_display_order(),
 		"slot_logs": [],
 		"completed_slots": [],
 		"errored_slots": [],
@@ -101,7 +101,7 @@ def _empty_round_state() -> dict[str, Any]:
 	}
 
 
-def _build_round_state(
+def build_round_state(
 	user_text: str,
 	system_prompt: str,
 	message_payload: list[dict[str, str]],
@@ -138,26 +138,26 @@ def _build_round_state(
 	}
 
 
-def _display_order_from_state(round_state: dict[str, Any] | None) -> list[int]:
+def display_order_from_state(round_state: dict[str, Any] | None) -> list[int]:
 	if not isinstance(round_state, dict):
-		return _default_display_order()
+		return default_display_order()
 
 	display_order = round_state.get("display_order")
 	if not isinstance(display_order, list) or len(display_order) != PANEL_COUNT:
-		return _default_display_order()
+		return default_display_order()
 
 	try:
 		normalized_order = [int(slot) for slot in display_order]
 	except (TypeError, ValueError):
-		return _default_display_order()
+		return default_display_order()
 
-	if sorted(normalized_order) != _default_display_order():
-		return _default_display_order()
+	if sorted(normalized_order) != default_display_order():
+		return default_display_order()
 
 	return normalized_order
 
 
-def _slot_logs_from_state(round_state: dict[str, Any] | None) -> list[dict[str, Any]]:
+def slot_logs_from_state(round_state: dict[str, Any] | None) -> list[dict[str, Any]]:
 	if not isinstance(round_state, dict):
 		return []
 

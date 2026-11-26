@@ -1,13 +1,13 @@
 from arena.state.voting import (
-	_ranking_choices_from_state,
 	_remaining_vote_choices,
 	_vote_response,
+	ranking_choices_from_state,
 	reset_vote,
 )
 
 
 def test_ranking_choices_from_state_ignores_invalid_values() -> None:
-	first_choice, second_choice, third_choice = _ranking_choices_from_state(
+	first_choice, second_choice, third_choice = ranking_choices_from_state(
 		{
 			"first_choice": "Response A",
 			"second_choice": "Not a label",

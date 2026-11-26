@@ -1,18 +1,15 @@
 from arena.core import models as model_module
 from arena.core.models import (
+	CatalogState,
 	_build_provider_index,
-	_chatbot_label,
 	_default_model_ids,
-	_fallback_model_catalog,
-	_load_model_catalog,
-	_model_choices_for_provider,
-	_provider_for_model,
-	_resolve_model_for_provider,
+	fallback_model_catalog,
+	load_model_catalog,
 )
 
 
 def test_fallback_model_catalog_has_expected_entries() -> None:
-	catalog = _fallback_model_catalog()
+	catalog = fallback_model_catalog()
 
 	assert [entry["provider_key"] for entry in catalog] == ["google", "openai", "anthropic"]
 	assert [entry["model_id"] for entry in catalog] == [
@@ -82,44 +79,49 @@ def test_default_model_ids_fall_back_to_provider_and_cycle_to_fill_slots() -> No
 	assert resolved_ids == ["alpha/one", "beta/two", "alpha/one", "beta/two"]
 
 
-def test_model_lookup_helpers_fall_back_cleanly() -> None:
-	model_lookup = {
-		"alpha/one": {"full_label": "Alpha: One", "provider_key": "alpha"},
-	}
-	provider_choices = [("Alpha", "alpha"), ("Beta", "beta")]
-	provider_models = {
-		"alpha": [{"model_label": "One", "model_id": "alpha/one"}],
-		"beta": [{"model_label": "Two", "model_id": "beta/two"}],
-	}
-	model_catalog = [{"model_label": "Fallback", "model_id": "fallback/model"}]
-
-	assert _chatbot_label(model_lookup, "alpha/one") == "Alpha: One"
-	assert _chatbot_label(model_lookup, "") == "Model"
-	assert _provider_for_model(model_lookup, provider_choices, "beta/two") == "beta"
-	assert _provider_for_model(model_lookup, provider_choices, "") == "alpha"
-	assert _model_choices_for_provider(provider_models, model_catalog, "beta") == [
-		("Two", "beta/two")
-	]
-	assert _resolve_model_for_provider(provider_models, model_catalog, "beta") == "beta/two"
-	assert (
-		_resolve_model_for_provider(provider_models, model_catalog, "beta", "beta/two")
-		== "beta/two"
+def test_catalog_state_lookups_fall_back_cleanly() -> None:
+	state = CatalogState(
+		[
+			{
+				"model_id": "alpha/one",
+				"provider_key": "alpha",
+				"provider_label": "Alpha",
+				"model_label": "One",
+				"full_label": "Alpha: One",
+			},
+			{
+				"model_id": "beta/two",
+				"provider_key": "beta",
+				"provider_label": "Beta",
+				"model_label": "Two",
+				"full_label": "Beta: Two",
+			},
+		],
+		"Test catalog.",
 	)
+
+	assert state.chatbot_label("alpha/one") == "Alpha: One"
+	assert state.chatbot_label("") == "Model"
+	assert state.provider_for_model("beta/two") == "beta"
+	assert state.provider_for_model("") == "alpha"
+	assert state.model_choices_for_provider("beta") == [("Two", "beta/two")]
+	assert state.resolve_model_for_provider("beta") == "beta/two"
+	assert state.resolve_model_for_provider("beta", "beta/two") == "beta/two"
 
 
 def test_load_model_catalog_without_api_key_uses_fallback(monkeypatch) -> None:
 	monkeypatch.setattr(model_module, "load_dotenv", lambda: None)
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: None)
 
-	catalog, status, api_key, ready = _load_model_catalog(
+	state = load_model_catalog(
 		site_url="http://localhost:7860",
 		site_name="LLM Council Arena",
 	)
 
-	assert catalog == _fallback_model_catalog()
-	assert "missing" in status.lower()
-	assert api_key is None
-	assert ready is False
+	assert state.catalog == fallback_model_catalog()
+	assert "missing" in state.status.lower()
+	assert state.api_key is None
+	assert state.ready is False
 
 
 def test_load_model_catalog_with_api_key_returns_live_catalog(monkeypatch) -> None:
@@ -147,12 +149,12 @@ def test_load_model_catalog_with_api_key_returns_live_catalog(monkeypatch) -> No
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 
-	catalog, status, api_key, ready = _load_model_catalog(
+	state = load_model_catalog(
 		site_url="http://localhost:7860",
 		site_name="LLM Council Arena",
 	)
 
-	assert catalog == [
+	assert state.catalog == [
 		{
 			"model_id": "alpha/one",
 			"provider_key": "alpha",
@@ -161,9 +163,9 @@ def test_load_model_catalog_with_api_key_returns_live_catalog(monkeypatch) -> No
 			"full_label": "Alpha: One",
 		}
 	]
-	assert "loaded 1 text-capable models" in status.lower()
-	assert api_key == "test-api-key"
-	assert ready is True
+	assert "loaded 1 text-capable models" in state.status.lower()
+	assert state.api_key == "test-api-key"
+	assert state.ready is True
 
 
 def test_load_model_catalog_with_api_key_falls_back_on_catalog_error(monkeypatch) -> None:
@@ -181,15 +183,15 @@ def test_load_model_catalog_with_api_key_falls_back_on_catalog_error(monkeypatch
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 
-	catalog, status, api_key, ready = _load_model_catalog(
+	state = load_model_catalog(
 		site_url="http://localhost:7860",
 		site_name="LLM Council Arena",
 	)
 
-	assert catalog == _fallback_model_catalog()
-	assert "could not load the live openrouter catalog" in status.lower()
-	assert api_key == "test-api-key"
-	assert ready is False
+	assert state.catalog == fallback_model_catalog()
+	assert "could not load the live openrouter catalog" in state.status.lower()
+	assert state.api_key == "test-api-key"
+	assert state.ready is False
 
 
 def test_load_model_catalog_with_api_key_falls_back_on_key_validation_error(monkeypatch) -> None:
@@ -207,12 +209,12 @@ def test_load_model_catalog_with_api_key_falls_back_on_key_validation_error(monk
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 
-	catalog, status, api_key, ready = _load_model_catalog(
+	state = load_model_catalog(
 		site_url="http://localhost:7860",
 		site_name="LLM Council Arena",
 	)
 
-	assert catalog == _fallback_model_catalog()
-	assert "could not validate openrouter_api_key" in status.lower()
-	assert api_key == "test-api-key"
-	assert ready is False
+	assert state.catalog == fallback_model_catalog()
+	assert "could not validate openrouter_api_key" in state.status.lower()
+	assert state.api_key == "test-api-key"
+	assert state.ready is False

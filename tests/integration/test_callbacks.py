@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from arena import app as app_module
 
 
@@ -21,7 +23,7 @@ def _build_completed_round_state(
 	display_order: list[int] | None = None,
 ) -> dict[str, object]:
 	resolved_display_order = display_order if display_order is not None else [2, 0, 1]
-	round_state = app_module._build_round_state(
+	round_state = app_module.build_round_state(
 		user_text="Compare these models.",
 		system_prompt="System prompt",
 		message_payload=app_module._build_messages("Compare these models.", "System prompt"),
@@ -51,7 +53,9 @@ def _build_completed_round_state(
 	return round_state
 
 
-def test_update_panel_provider_resolves_model_choices_and_resets_outputs(monkeypatch) -> None:
+def test_update_panel_provider_resolves_model_choices_and_resets_outputs(
+	monkeypatch, use_catalog
+) -> None:
 	reset_outputs = (
 		"chat-1",
 		"chat-2",
@@ -63,7 +67,10 @@ def test_update_panel_provider_resolves_model_choices_and_resets_outputs(monkeyp
 		"vote-reset",
 		"vote-submit",
 	)
-	monkeypatch.setattr(app_module, "_resolve_model_for_provider", lambda provider_key: "beta/two")
+	use_catalog(
+		{"model_id": "alpha/one", "model_label": "One"},
+		{"model_id": "beta/two", "model_label": "Two"},
+	)
 	monkeypatch.setattr(
 		app_module,
 		"_reasoning_control_updates",
@@ -72,13 +79,7 @@ def test_update_panel_provider_resolves_model_choices_and_resets_outputs(monkeyp
 			"reasoning-cost-hint",
 		),
 	)
-	monkeypatch.setattr(
-		app_module,
-		"_model_choices_for_provider",
-		lambda provider_key: [("Two", "beta/two")],
-	)
 	monkeypatch.setattr(app_module, "_reset_arena_outputs", lambda: reset_outputs)
-	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
 
 	outputs = app_module.update_panel_provider("beta")
 
@@ -119,19 +120,19 @@ def test_update_panel_model_resets_arena_outputs(monkeypatch) -> None:
 	)
 
 
-def test_ui_readiness_follows_flag_not_status_wording(monkeypatch) -> None:
-	monkeypatch.setattr(app_module, "MODEL_CATALOG_STATUS", "Warning: reworded but live")
-	monkeypatch.setattr(app_module, "MODEL_CATALOG_READY", True)
+def test_ui_readiness_follows_flag_not_status_wording(monkeypatch, use_catalog) -> None:
+	live = use_catalog({"model_id": "alpha/one"}, ready=True)
+	monkeypatch.setattr(app_module, "CATALOG", replace(live, status="Warning: reworded but live"))
 	assert app_module._openrouter_status_banner().visible is False
 
-	monkeypatch.setattr(app_module, "MODEL_CATALOG_STATUS", "Loaded 3 text-capable models.")
-	monkeypatch.setattr(app_module, "MODEL_CATALOG_READY", False)
+	monkeypatch.setattr(
+		app_module, "CATALOG", replace(live, status="Loaded 3 text-capable models.", ready=False)
+	)
 	assert app_module._openrouter_status_banner().visible is True
 
 
-def test_reasoning_control_updates_hide_controls_for_unsupported_models(monkeypatch) -> None:
-	monkeypatch.setattr(app_module, "MODEL_LOOKUP", {"alpha/one": {}})
-	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
+def test_reasoning_control_updates_hide_controls_for_unsupported_models(use_catalog) -> None:
+	use_catalog({"model_id": "alpha/one"})
 
 	effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
 
@@ -139,20 +140,16 @@ def test_reasoning_control_updates_hide_controls_for_unsupported_models(monkeypa
 	assert cost_hint["visible"] is False
 
 
-def test_reasoning_control_updates_show_effort_for_generic_reasoning(monkeypatch) -> None:
-	monkeypatch.setattr(
-		app_module,
-		"MODEL_LOOKUP",
+def test_reasoning_control_updates_show_effort_for_generic_reasoning(use_catalog) -> None:
+	use_catalog(
 		{
-			"alpha/one": {
-				"supported_parameters": ["include_reasoning", "max_tokens", "reasoning"],
-				"top_provider": {"max_completion_tokens": 8192},
-				"default_parameters": {"reasoning": {"max_tokens": 2048}},
-				"pricing": {"prompt": "0.000001", "completion": "0.000002"},
-			}
+			"model_id": "alpha/one",
+			"supported_parameters": ["include_reasoning", "max_tokens", "reasoning"],
+			"top_provider": {"max_completion_tokens": 8192},
+			"default_parameters": {"reasoning": {"max_tokens": 2048}},
+			"pricing": {"prompt": "0.000001", "completion": "0.000002"},
 		},
 	)
-	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
 
 	effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
 
@@ -163,20 +160,16 @@ def test_reasoning_control_updates_show_effort_for_generic_reasoning(monkeypatch
 	assert cost_hint["value"] == ("input $1/M; output $2/M")
 
 
-def test_reasoning_control_updates_show_effort_dropdown_only(monkeypatch) -> None:
-	monkeypatch.setattr(
-		app_module,
-		"MODEL_LOOKUP",
+def test_reasoning_control_updates_show_effort_dropdown_only(use_catalog) -> None:
+	use_catalog(
 		{
-			"alpha/one": {
-				"supported_parameters": ["reasoning.effort", "reasoning.max_tokens"],
-				"default_parameters": {"reasoning_effort": "high"},
-				"top_provider": {"max_completion_tokens": 8192},
-				"pricing": {"internal_reasoning": "0.000003"},
-			}
+			"model_id": "alpha/one",
+			"supported_parameters": ["reasoning.effort", "reasoning.max_tokens"],
+			"default_parameters": {"reasoning_effort": "high"},
+			"top_provider": {"max_completion_tokens": 8192},
+			"pricing": {"internal_reasoning": "0.000003"},
 		},
 	)
-	monkeypatch.setattr(app_module, "_selectors_interactive", lambda: True)
 
 	effort, cost_hint = app_module._reasoning_control_updates("alpha/one")
 
@@ -187,18 +180,15 @@ def test_reasoning_control_updates_show_effort_dropdown_only(monkeypatch) -> Non
 	assert cost_hint["value"] == "reasoning $3/M"
 
 
-def test_reasoning_control_updates_hide_budget_only_models(monkeypatch) -> None:
-	monkeypatch.setattr(
-		app_module,
-		"MODEL_LOOKUP",
+def test_reasoning_control_updates_hide_budget_only_models(use_catalog) -> None:
+	use_catalog(
 		{
-			"budget/model": {
-				"id": "unknown/reasoner",
-				"supported_parameters": ["reasoning.max_tokens"],
-				"top_provider": {"max_completion_tokens": 4096},
-			},
-			"effort/model": {"supported_parameters": ["reasoning"]},
+			"model_id": "budget/model",
+			"id": "unknown/reasoner",
+			"supported_parameters": ["reasoning.max_tokens"],
+			"top_provider": {"max_completion_tokens": 4096},
 		},
+		{"model_id": "effort/model", "supported_parameters": ["reasoning"]},
 	)
 
 	effort, cost_hint = app_module._reasoning_control_updates("budget/model")
@@ -218,7 +208,7 @@ def test_submit_vote_outputs_uses_round_histories_and_leaderboard(monkeypatch) -
 	)
 	monkeypatch.setattr(
 		app_module,
-		"_chatbot_updates",
+		"chatbot_updates",
 		lambda histories, display_order, current_state: (
 			captured.update(
 				{
@@ -232,7 +222,7 @@ def test_submit_vote_outputs_uses_round_histories_and_leaderboard(monkeypatch) -
 	)
 	monkeypatch.setattr(
 		app_module,
-		"_vote_ui_updates",
+		"vote_ui_updates",
 		lambda current_state: ("vote-a", "vote-b", "vote-c", "vote-reset", "vote-submit"),
 	)
 	monkeypatch.setattr(

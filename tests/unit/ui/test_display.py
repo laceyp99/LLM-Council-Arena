@@ -1,23 +1,23 @@
 import gradio as gr
 
 from arena.ui.display import (
-	_chatbot_config,
 	_chatbot_panel_label,
-	_extract_reasoning_tokens,
-	_finalize_round_state_logs,
-	_format_reasoning_details,
-	_message_text_content,
 	_reasoning_trace_title,
 	_serialize_history,
-	_stats_footer,
-	_status_message,
-	_upsert_assistant_message,
-	_upsert_reasoning_message,
+	chatbot_config,
+	extract_reasoning_tokens,
+	finalize_round_state_logs,
+	format_reasoning_details,
+	message_text_content,
+	stats_footer,
+	status_message,
+	upsert_assistant_message,
+	upsert_reasoning_message,
 )
 
 
 def test_chatbot_config_uses_messages_type() -> None:
-	chatbot = _chatbot_config(label="Panel A")
+	chatbot = chatbot_config(label="Panel A")
 
 	assert chatbot.type == "messages"
 
@@ -46,8 +46,8 @@ def test_message_text_content_and_serialize_history_handle_supported_types() -> 
 
 	serialized = _serialize_history(history)
 
-	assert _message_text_content(history[0]) == "Hello"
-	assert _message_text_content(history[1]) == "Hi"
+	assert message_text_content(history[0]) == "Hello"
+	assert message_text_content(history[1]) == "Hi"
 	assert serialized == [
 		{"role": "assistant", "content": "Hello", "metadata": {"title": "Greeting"}},
 		{"role": "user", "content": "Hi", "metadata": {"source": "test"}},
@@ -56,7 +56,7 @@ def test_message_text_content_and_serialize_history_handle_supported_types() -> 
 
 
 def test_status_message_is_a_distinct_completed_chat_message() -> None:
-	message = _status_message("[Error] provider failure", "Generation Error")
+	message = status_message("[Error] provider failure", "Generation Error")
 
 	assert message.role == "assistant"
 	assert message.content == "[Error] provider failure"
@@ -80,7 +80,7 @@ def test_finalize_round_state_logs_captures_histories_and_outputs() -> None:
 		[{"role": "assistant", "content": "Another answer"}],
 	]
 
-	_finalize_round_state_logs(round_state, histories, [1, None, None])
+	finalize_round_state_logs(round_state, histories, [1, None, None])
 
 	assert round_state["slot_logs"][0]["final_response"] == "Accumulated answer"
 	assert round_state["slot_logs"][0]["reasoning_trace"] == "Reasoning trail"
@@ -96,8 +96,8 @@ def test_reasoning_helpers_render_summary_redaction_and_stats() -> None:
 		{"type": "reasoning.unknown", "data": "?"},
 	]
 
-	formatted = _format_reasoning_details(reasoning_details)
-	history = _stats_footer(
+	formatted = format_reasoning_details(reasoning_details)
+	history = stats_footer(
 		[],
 		{
 			"stats": {
@@ -118,7 +118,7 @@ def test_reasoning_helpers_render_summary_redaction_and_stats() -> None:
 	assert "Short summary" in formatted
 	assert "redacted by the provider" in formatted
 	assert "unsupported reasoning block" in formatted
-	assert _extract_reasoning_tokens({"completion_tokens_details": {"reasoning_tokens": "4"}}) == 4
+	assert extract_reasoning_tokens({"completion_tokens_details": {"reasoning_tokens": "4"}}) == 4
 	assert _reasoning_trace_title({"completion_tokens_details": {"reasoning_tokens": 1}}).endswith(
 		"1 token"
 	)
@@ -129,15 +129,15 @@ def test_reasoning_helpers_render_summary_redaction_and_stats() -> None:
 
 def test_upsert_message_helpers_append_and_insert_consistently() -> None:
 	history: list[object] = []
-	assistant_index = _upsert_assistant_message(history, None, "First answer")
-	reasoning_index, assistant_index = _upsert_reasoning_message(
+	assistant_index = upsert_assistant_message(history, None, "First answer")
+	reasoning_index, assistant_index = upsert_reasoning_message(
 		history,
 		message_index=None,
 		slot=1,
 		content="Reasoning",
 		assistant_message_index=assistant_index,
 	)
-	assistant_index = _upsert_assistant_message(history, assistant_index, " updated", append=True)
+	assistant_index = upsert_assistant_message(history, assistant_index, " updated", append=True)
 
 	assert reasoning_index == 0
 	assert assistant_index == 1

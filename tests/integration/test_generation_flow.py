@@ -10,17 +10,17 @@ from arena.core import api as api_module
 def _stub_ui_helpers(monkeypatch) -> None:
 	monkeypatch.setattr(
 		app_module,
-		"_chatbot_updates",
+		"chatbot_updates",
 		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
 	)
 	monkeypatch.setattr(
 		app_module,
-		"_targeted_chatbot_value_updates",
+		"targeted_chatbot_value_updates",
 		lambda *args, **kwargs: ("panel-1", "panel-2", "panel-3"),
 	)
 	monkeypatch.setattr(
 		app_module,
-		"_vote_ui_updates",
+		"vote_ui_updates",
 		lambda *args, **kwargs: (
 			"vote-a",
 			"vote-b",
@@ -137,7 +137,7 @@ def _build_generation_context() -> tuple[
 	set[int],
 ]:
 	user_text = "Compare the models."
-	round_state = app_module._build_round_state(
+	round_state = app_module.build_round_state(
 		user_text=user_text,
 		system_prompt="System prompt",
 		message_payload=app_module._build_messages(user_text, "System prompt"),
@@ -173,13 +173,13 @@ def test_apply_stream_chunk_appends_delta_without_finalizing_logs(monkeypatch) -
 		errored_slots,
 	) = _build_generation_context()
 	finalize_calls: list[object] = []
-	original_finalize = app_module._finalize_round_state_logs
+	original_finalize = app_module.finalize_round_state_logs
 
 	def track_finalization(*args) -> None:
 		finalize_calls.append(args)
 		original_finalize(*args)
 
-	monkeypatch.setattr(app_module, "_finalize_round_state_logs", track_finalization)
+	monkeypatch.setattr(app_module, "finalize_round_state_logs", track_finalization)
 
 	slot = app_module._apply_stream_chunk(
 		round_state,
@@ -358,9 +358,10 @@ def test_finalize_generation_state_marks_vote_unavailable_without_completions() 
 @pytest.mark.anyio
 async def test_stream_all_models_starts_new_round_with_cleared_submission_status(
 	monkeypatch,
+	use_catalog,
 ) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", None)
+	use_catalog(api_key=None)
 
 	outputs = await _collect_stream_outputs(
 		"Compare models.",
@@ -414,9 +415,9 @@ async def test_stream_all_models_blocks_when_panel_has_no_model_selected(monkeyp
 
 
 @pytest.mark.anyio
-async def test_stream_all_models_blocks_when_api_key_is_missing(monkeypatch) -> None:
+async def test_stream_all_models_blocks_when_api_key_is_missing(monkeypatch, use_catalog) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", None)
+	use_catalog(api_key=None)
 
 	outputs = await _collect_stream_outputs(
 		"Compare models.",
@@ -446,24 +447,23 @@ async def test_stream_all_models_blocks_when_api_key_is_missing(monkeypatch) -> 
 
 
 @pytest.mark.anyio
-async def test_stream_all_models_completes_successfully_with_fake_stream(monkeypatch) -> None:
+async def test_stream_all_models_completes_successfully_with_fake_stream(
+	monkeypatch, use_catalog
+) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
-	monkeypatch.setattr(
-		app_module,
-		"MODEL_LOOKUP",
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
+	catalog = use_catalog(
 		{
-			"beta/two": {
-				"full_label": "Beta Two",
-				"provider_key": "beta",
-				"supported_parameters": ["reasoning"],
-			},
-			"gamma/three": {
-				"full_label": "Gamma Three",
-				"provider_key": "gamma",
-				"supported_parameters": ["reasoning"],
-			},
+			"model_id": "beta/two",
+			"full_label": "Beta Two",
+			"provider_key": "beta",
+			"supported_parameters": ["reasoning"],
+		},
+		{
+			"model_id": "gamma/three",
+			"full_label": "Gamma Three",
+			"provider_key": "gamma",
+			"supported_parameters": ["reasoning"],
 		},
 	)
 	requests = _fake_streaming_api(
@@ -528,21 +528,13 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 		{
 			"slot": 1,
 			"model": "beta/two",
-			"model_entry": {
-				"full_label": "Beta Two",
-				"provider_key": "beta",
-				"supported_parameters": ["reasoning"],
-			},
+			"model_entry": catalog.lookup["beta/two"],
 			"reasoning_payload": {"effort": "none"},
 		},
 		{
 			"slot": 2,
 			"model": "gamma/three",
-			"model_entry": {
-				"full_label": "Gamma Three",
-				"provider_key": "gamma",
-				"supported_parameters": ["reasoning"],
-			},
+			"model_entry": catalog.lookup["gamma/three"],
 			"reasoning_payload": {"effort": "high", "exclude": False},
 		},
 	]
@@ -565,29 +557,28 @@ async def test_stream_all_models_completes_successfully_with_fake_stream(monkeyp
 @pytest.mark.anyio
 async def test_stream_all_models_emits_reasoning_payload_through_openrouter_request(
 	monkeypatch,
+	use_catalog,
 ) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
-	monkeypatch.setattr(
-		app_module,
-		"MODEL_LOOKUP",
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
+	use_catalog(
 		{
-			"alpha/one": {
-				"full_label": "Alpha One",
-				"provider_key": "alpha",
-				"supported_parameters": [],
-			},
-			"beta/two": {
-				"full_label": "Beta Two",
-				"provider_key": "beta",
-				"supported_parameters": ["reasoning"],
-			},
-			"gamma/three": {
-				"full_label": "Gamma Three",
-				"provider_key": "gamma",
-				"supported_parameters": ["reasoning"],
-			},
+			"model_id": "alpha/one",
+			"full_label": "Alpha One",
+			"provider_key": "alpha",
+			"supported_parameters": [],
+		},
+		{
+			"model_id": "beta/two",
+			"full_label": "Beta Two",
+			"provider_key": "beta",
+			"supported_parameters": ["reasoning"],
+		},
+		{
+			"model_id": "gamma/three",
+			"full_label": "Gamma Three",
+			"provider_key": "gamma",
+			"supported_parameters": ["reasoning"],
 		},
 	)
 
@@ -654,11 +645,11 @@ async def test_stream_all_models_emits_reasoning_payload_through_openrouter_requ
 @pytest.mark.anyio
 async def test_stream_all_models_warns_when_selected_reasoning_is_unsupported(
 	monkeypatch,
+	use_catalog,
 ) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
-	monkeypatch.setattr(app_module, "MODEL_LOOKUP", {})
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
+	use_catalog()
 	requests = _fake_streaming_api(
 		monkeypatch,
 		[
@@ -697,10 +688,12 @@ async def test_stream_all_models_warns_when_selected_reasoning_is_unsupported(
 
 
 @pytest.mark.anyio
-async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(monkeypatch) -> None:
+async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(
+	monkeypatch, use_catalog
+) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	use_catalog()
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
 	_fake_streaming_api(
 		monkeypatch,
 		[
@@ -740,10 +733,10 @@ async def test_stream_all_models_marks_mixed_success_and_error_as_vote_ready(mon
 
 
 @pytest.mark.anyio
-async def test_stream_all_models_reports_stream_failure_per_slot(monkeypatch) -> None:
+async def test_stream_all_models_reports_stream_failure_per_slot(monkeypatch, use_catalog) -> None:
 	_stub_ui_helpers(monkeypatch)
-	monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "test-api-key")
-	monkeypatch.setattr(app_module, "_shuffled_display_order", lambda: [0, 1, 2])
+	use_catalog()
+	monkeypatch.setattr(app_module, "shuffled_display_order", lambda: [0, 1, 2])
 	monkeypatch.setattr(api_module.httpx, "AsyncClient", _NoopAsyncClient)
 	monkeypatch.setattr(app_module.OpenRouterAPI, "_prompt_model", _failing_prompt_model)
 
