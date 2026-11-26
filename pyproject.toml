@@ -19,7 +19,7 @@ llm-council-arena = "arena.__main__:main"
 
 [project.optional-dependencies]
 dev = [
-    "pytest==8.3.5",
+    "pytest==9.0.3",
     "ruff==0.11.5",
     "pre-commit==4.5.1",
 ]
