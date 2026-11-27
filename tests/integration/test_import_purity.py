@@ -23,9 +23,9 @@ def test_importing_arena_app_does_not_create_persistence_files(tmp_path: Path) -
 		config_module.APP_DIR = temp_root
 		config_module.APP_ICON_PATH = temp_root / "app" / "icon.png"
 		config_module.DEFAULT_MODEL_IDS = [
-			"google/gemini-3.5-flash-lite",
-			"openai/gpt-5.6-luna",
-			"anthropic/claude-sonnet-5",
+			"openai/gpt-6.1-terra",
+			"anthropic/claude-sonnet-5.5",
+			"google/gemini-4-hydrogen",
 		]
 		config_module.DEFAULT_REASONING_SETTINGS = {"enabled": True}
 		config_module.DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."

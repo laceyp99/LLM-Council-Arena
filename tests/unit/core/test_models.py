@@ -11,11 +11,11 @@ from arena.core.models import (
 def test_fallback_model_catalog_has_expected_entries() -> None:
 	catalog = fallback_model_catalog()
 
-	assert [entry["provider_key"] for entry in catalog] == ["google", "openai", "anthropic"]
+	assert [entry["provider_key"] for entry in catalog] == ["openai", "anthropic", "google"]
 	assert [entry["model_id"] for entry in catalog] == [
-		"google/gemini-3.5-flash-lite",
-		"openai/gpt-5.6-luna",
-		"anthropic/claude-sonnet-5",
+		"openai/gpt-6.1-terra",
+		"anthropic/claude-sonnet-5.5",
+		"google/gemini-4-hydrogen",
 	]
 	assert all(
 		{"model_id", "provider_key", "provider_label", "model_label", "full_label"} <= set(entry)
