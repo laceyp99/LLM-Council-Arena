@@ -5,9 +5,9 @@ SITE_NAME = "LLM Council Arena"
 PANEL_COUNT = 3
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 DEFAULT_MODEL_IDS = [
-	"google/gemini-3.5-flash-lite",
-	"openai/gpt-5.6-luna",
-	"anthropic/claude-sonnet-5",
+	"openai/gpt-6.1-terra",
+	"anthropic/claude-sonnet-5.5",
+	"google/gemini-4-hydrogen",
 ]
 APP_DIR = Path(__file__).resolve().parents[2]
 APP_ICON_PATH = APP_DIR / "app" / "icon.png"
