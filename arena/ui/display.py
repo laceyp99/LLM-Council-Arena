@@ -11,7 +11,11 @@ from arena.ui.config import PANEL_COUNT
 
 
 def chatbot_config(**kwargs: Any) -> gr.Chatbot:
-	return gr.Chatbot(type="messages", group_consecutive_messages=False, **kwargs)
+	# Strip custom tags such as <thinking> from model output. Keep only the per-message copy
+	# button; Gradio's default share and copy-all buttons crowd the fixed-height panels.
+	return gr.Chatbot(
+		group_consecutive_messages=False, allow_tags=False, buttons=["copy"], **kwargs
+	)
 
 
 def _chatbot_panel_label(display_index: int, round_state: dict[str, Any] | None = None) -> str:

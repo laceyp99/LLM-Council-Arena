@@ -4,7 +4,6 @@ from arena.ui.display import (
 	_chatbot_panel_label,
 	_reasoning_trace_title,
 	_serialize_history,
-	chatbot_config,
 	extract_reasoning_tokens,
 	finalize_round_state_logs,
 	format_reasoning_details,
@@ -14,12 +13,6 @@ from arena.ui.display import (
 	upsert_assistant_message,
 	upsert_reasoning_message,
 )
-
-
-def test_chatbot_config_uses_messages_type() -> None:
-	chatbot = chatbot_config(label="Panel A")
-
-	assert chatbot.type == "messages"
 
 
 def test_chatbot_panel_label_uses_model_label_after_submission() -> None:
