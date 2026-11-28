@@ -40,11 +40,10 @@ tests that write files point the data paths at a temporary folder.
 The hooks run Ruff (with fixes), whitespace and end-of-file fixers, YAML and TOML checks,
 a large-file check, line endings normalized to CRLF, and the full test suite.
 
-!!! warning "The pytest hook uses your PATH"
-    The `pytest` hook runs whichever `pytest` is first on `PATH`, not necessarily the one in
-    `.venv`. If a global Python with a different Gradio comes first, tests fail for reasons
-    unrelated to your change. Activate `.venv` (or put `.venv\Scripts` first on `PATH`)
-    before committing.
+> **The pytest hook uses your PATH.** It runs whichever `pytest` is first on `PATH`, not
+> necessarily the one in `.venv`. If a global Python with a different Gradio comes first,
+> tests fail for reasons unrelated to your change. Activate `.venv` (or put
+> `.venv\Scripts` first on `PATH`) before committing.
 
 ### Docs
 

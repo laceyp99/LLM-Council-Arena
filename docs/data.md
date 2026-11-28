@@ -23,10 +23,9 @@ arena_logs/
 `*.lock` files appear next to `votes.jsonl` and `meta.json` while the app runs. They are
 safe to delete when the app is stopped.
 
-!!! warning "Privacy"
-    These files store your prompts, the system prompt, and the full model responses in
-    plain text. API keys are never written. Treat the folder as private if your prompts
-    are.
+> **Privacy:** these files store your prompts, the system prompt, and the full model
+> responses in plain text. API keys are never written. Treat the folder as private if
+> your prompts are.
 
 ## `votes.jsonl`
 
