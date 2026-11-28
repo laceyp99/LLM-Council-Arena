@@ -415,9 +415,26 @@ async def test_stream_all_models_blocks_when_panel_has_no_model_selected(monkeyp
 
 
 @pytest.mark.anyio
-async def test_stream_all_models_blocks_when_api_key_is_missing(monkeypatch, use_catalog) -> None:
+@pytest.mark.parametrize(
+	("api_key", "expected_error"),
+	[
+		(None, "Missing OPENROUTER_API_KEY in environment."),
+		(
+			"rejected-key",
+			"OpenRouter is not ready. Fix OPENROUTER_API_KEY, then restart the app.",
+		),
+	],
+)
+async def test_stream_all_models_blocks_when_catalog_is_not_ready(
+	monkeypatch, use_catalog, api_key, expected_error
+) -> None:
 	_stub_ui_helpers(monkeypatch)
-	use_catalog(api_key=None)
+	use_catalog(api_key=api_key, ready=False)
+
+	def fail_if_called(*args, **kwargs):
+		raise AssertionError("OpenRouter must not be called while the catalog is not ready.")
+
+	monkeypatch.setattr(app_module, "OpenRouterAPI", fail_if_called)
 
 	outputs = await _collect_stream_outputs(
 		"Compare models.",
@@ -440,10 +457,7 @@ async def test_stream_all_models_blocks_when_api_key_is_missing(monkeypatch, use
 		"blocked",
 		"blocked",
 	]
-	assert all(
-		slot_log["error"] == "Missing OPENROUTER_API_KEY in environment."
-		for slot_log in final_round_state["slot_logs"]
-	)
+	assert all(slot_log["error"] == expected_error for slot_log in final_round_state["slot_logs"])
 
 
 @pytest.mark.anyio

@@ -1000,15 +1000,21 @@ async def stream_all_models(
 		)
 		return
 
-	if not CATALOG.api_key:
+	# A disabled Send button does not stop calls through Gradio's API, so gate here too.
+	if not CATALOG.ready:
+		blocked_message = (
+			"OpenRouter is not ready. Fix OPENROUTER_API_KEY, then restart the app."
+			if CATALOG.api_key
+			else "Missing OPENROUTER_API_KEY in environment."
+		)
 		for index in range(PANEL_COUNT):
 			assistant_message_indices[index] = upsert_assistant_message(
 				history=histories[index],
 				message_index=assistant_message_indices[index],
-				content="Missing OPENROUTER_API_KEY in environment.",
+				content=blocked_message,
 			)
 			round_state["slot_logs"][index]["status"] = "blocked"
-			round_state["slot_logs"][index]["error"] = "Missing OPENROUTER_API_KEY in environment."
+			round_state["slot_logs"][index]["error"] = blocked_message
 		_finalize_blocked_generation_state(
 			round_state,
 			histories,
