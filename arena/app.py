@@ -40,7 +40,7 @@ from arena.state.voting import (
 	vote_ui_updates,
 )
 from arena.ui.config import (
-	APP_DIR,
+	DATA_DIR,
 	DEFAULT_SYSTEM_PROMPT,
 	LOGS_DIR,
 	META_LOG_FILE,
@@ -475,7 +475,7 @@ def _round_session_log_path(round_state: dict[str, Any]) -> tuple[Path, str]:
 	round_id = str(round_state.get("round_id") or uuid4().hex)
 	session_dir_name = f"{_timestamp_slug(str(round_state.get('submitted_at') or ''))}_{round_id}"
 	session_dir = SESSION_LOGS_DIR / session_dir_name
-	session_dir_relative = session_dir.relative_to(APP_DIR).as_posix()
+	session_dir_relative = session_dir.relative_to(DATA_DIR).as_posix()
 	return session_dir, session_dir_relative
 
 
@@ -568,10 +568,9 @@ def _openrouter_status_banner() -> gr.HTML:
 	if CATALOG.ready:
 		return gr.HTML(value="", visible=False)
 
-	message = (
-		"OpenRouter is not ready. Fix OPENROUTER_API_KEY in your environment variables, "
-		"then restart the app and retry."
-	)
+	# The status names the cause: missing key, rejected key, or failed catalog download.
+	cause = CATALOG.status.removeprefix("Warning: ")
+	message = f"OpenRouter is not ready: {cause} Fix this, then restart the app."
 
 	return gr.HTML(
 		value=(
@@ -1000,15 +999,21 @@ async def stream_all_models(
 		)
 		return
 
-	if not CATALOG.api_key:
+	# A disabled Send button does not stop calls through Gradio's API, so gate here too.
+	if not CATALOG.ready:
+		blocked_message = (
+			"OpenRouter is not ready. See the banner above for the cause, then restart the app."
+			if CATALOG.api_key
+			else "Missing OPENROUTER_API_KEY in environment."
+		)
 		for index in range(PANEL_COUNT):
 			assistant_message_indices[index] = upsert_assistant_message(
 				history=histories[index],
 				message_index=assistant_message_indices[index],
-				content="Missing OPENROUTER_API_KEY in environment.",
+				content=blocked_message,
 			)
 			round_state["slot_logs"][index]["status"] = "blocked"
-			round_state["slot_logs"][index]["error"] = "Missing OPENROUTER_API_KEY in environment."
+			round_state["slot_logs"][index]["error"] = blocked_message
 		_finalize_blocked_generation_state(
 			round_state,
 			histories,

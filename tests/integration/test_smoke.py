@@ -159,5 +159,7 @@ def test_startup_disables_model_selectors_when_api_key_validation_fails() -> Non
 	assert selector_config["model_interactive"] is False
 	assert selector_config["send_interactive"] is False
 	assert selector_config["readiness_banner_visible"] is True
-	assert "OpenRouter is not ready" in str(selector_config["readiness_banner_value"])
-	assert "OPENROUTER_API_KEY" in str(selector_config["readiness_banner_value"])
+	banner = str(selector_config["readiness_banner_value"])
+	assert "OpenRouter is not ready" in banner
+	# The banner names the actual cause, not generic key advice.
+	assert "could not validate OPENROUTER_API_KEY (unauthorized)" in banner

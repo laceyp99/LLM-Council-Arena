@@ -1,0 +1,42 @@
+site_name: LLM Council Arena
+site_description: Blind side-by-side LLM comparison and voting with Gradio and OpenRouter.
+repo_url: https://github.com/laceyp99/LLM-Council-Arena
+repo_name: laceyp99/LLM-Council-Arena
+# The repository is archived, so hide "edit this page" links.
+edit_uri: ""
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.footer
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Overview: index.md
+  - Setup: setup.md
+  - Using the arena: using-the-arena.md
+  - Data files: data.md
+  - Architecture: architecture.md
+  - Development: development.md
