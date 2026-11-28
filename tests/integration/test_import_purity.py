@@ -20,8 +20,9 @@ def test_importing_arena_app_does_not_create_persistence_files(tmp_path: Path) -
 		temp_root = Path(sys.argv[1])
 
 		config_module = types.ModuleType("arena.ui.config")
-		config_module.APP_DIR = temp_root
-		config_module.APP_ICON_PATH = temp_root / "app" / "icon.png"
+		config_module.DATA_DIR = temp_root
+		config_module.ENV_FILE = temp_root / ".env"
+		config_module.APP_ICON_PATH = temp_root / "icon.png"
 		config_module.DEFAULT_MODEL_IDS = [
 			"openai/gpt-6.1-terra",
 			"anthropic/claude-sonnet-5.5",

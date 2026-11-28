@@ -110,7 +110,7 @@ def test_catalog_state_lookups_fall_back_cleanly() -> None:
 
 
 def test_load_model_catalog_without_api_key_uses_fallback(monkeypatch) -> None:
-	monkeypatch.setattr(model_module, "load_dotenv", lambda: None)
+	monkeypatch.setattr(model_module, "load_dotenv", lambda *_: None)
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: None)
 
 	state = load_model_catalog(
@@ -145,7 +145,7 @@ def test_load_model_catalog_with_api_key_returns_live_catalog(monkeypatch) -> No
 				}
 			]
 
-	monkeypatch.setattr(model_module, "load_dotenv", lambda: None)
+	monkeypatch.setattr(model_module, "load_dotenv", lambda *_: None)
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 
@@ -179,7 +179,7 @@ def test_load_model_catalog_with_api_key_falls_back_on_catalog_error(monkeypatch
 		def get_normalized_text_models(self) -> list[dict[str, str]]:
 			raise RuntimeError("upstream unavailable")
 
-	monkeypatch.setattr(model_module, "load_dotenv", lambda: None)
+	monkeypatch.setattr(model_module, "load_dotenv", lambda *_: None)
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 
@@ -205,7 +205,7 @@ def test_load_model_catalog_with_api_key_falls_back_on_key_validation_error(monk
 		def get_normalized_text_models(self) -> list[dict[str, str]]:
 			raise AssertionError("catalog should not load when key validation fails")
 
-	monkeypatch.setattr(model_module, "load_dotenv", lambda: None)
+	monkeypatch.setattr(model_module, "load_dotenv", lambda *_: None)
 	monkeypatch.setattr(model_module.os, "getenv", lambda key: "test-api-key")
 	monkeypatch.setattr(model_module, "OpenRouterAPI", FakeOpenRouterAPI)
 

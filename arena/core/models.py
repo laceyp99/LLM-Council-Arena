@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 from arena.core.api import OpenRouterAPI
 from arena.core.reasoning import reasoning_capabilities_for_model
-from arena.ui.config import DEFAULT_MODEL_IDS, PANEL_COUNT
+from arena.ui.config import DEFAULT_MODEL_IDS, ENV_FILE, PANEL_COUNT
 
 
 def _fallback_entry(
@@ -113,7 +113,7 @@ class CatalogState:
 
 
 def load_model_catalog(site_url: str, site_name: str) -> CatalogState:
-	load_dotenv()
+	load_dotenv(ENV_FILE)
 	api_key = os.getenv("OPENROUTER_API_KEY")
 
 	if not api_key:

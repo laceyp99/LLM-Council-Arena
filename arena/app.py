@@ -40,7 +40,7 @@ from arena.state.voting import (
 	vote_ui_updates,
 )
 from arena.ui.config import (
-	APP_DIR,
+	DATA_DIR,
 	DEFAULT_SYSTEM_PROMPT,
 	LOGS_DIR,
 	META_LOG_FILE,
@@ -475,7 +475,7 @@ def _round_session_log_path(round_state: dict[str, Any]) -> tuple[Path, str]:
 	round_id = str(round_state.get("round_id") or uuid4().hex)
 	session_dir_name = f"{_timestamp_slug(str(round_state.get('submitted_at') or ''))}_{round_id}"
 	session_dir = SESSION_LOGS_DIR / session_dir_name
-	session_dir_relative = session_dir.relative_to(APP_DIR).as_posix()
+	session_dir_relative = session_dir.relative_to(DATA_DIR).as_posix()
 	return session_dir, session_dir_relative
 
 

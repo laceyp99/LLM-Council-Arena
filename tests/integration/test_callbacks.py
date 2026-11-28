@@ -6,7 +6,7 @@ from arena import app as app_module
 def _patch_log_paths(monkeypatch, tmp_path) -> None:
 	logs_dir = tmp_path / "arena_logs"
 	session_logs_dir = logs_dir / "sessions"
-	monkeypatch.setattr(app_module, "APP_DIR", tmp_path)
+	monkeypatch.setattr(app_module, "DATA_DIR", tmp_path)
 	monkeypatch.setattr(app_module, "LOGS_DIR", logs_dir)
 	monkeypatch.setattr(app_module, "SESSION_LOGS_DIR", session_logs_dir)
 	monkeypatch.setattr(app_module, "META_LOG_FILE", logs_dir / "meta.json")
