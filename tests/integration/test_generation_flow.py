@@ -421,7 +421,7 @@ async def test_stream_all_models_blocks_when_panel_has_no_model_selected(monkeyp
 		(None, "Missing OPENROUTER_API_KEY in environment."),
 		(
 			"rejected-key",
-			"OpenRouter is not ready. Fix OPENROUTER_API_KEY, then restart the app.",
+			"OpenRouter is not ready. See the banner above for the cause, then restart the app.",
 		),
 	],
 )

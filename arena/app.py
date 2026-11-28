@@ -568,10 +568,9 @@ def _openrouter_status_banner() -> gr.HTML:
 	if CATALOG.ready:
 		return gr.HTML(value="", visible=False)
 
-	message = (
-		"OpenRouter is not ready. Fix OPENROUTER_API_KEY in your environment variables, "
-		"then restart the app and retry."
-	)
+	# The status names the cause: missing key, rejected key, or failed catalog download.
+	cause = CATALOG.status.removeprefix("Warning: ")
+	message = f"OpenRouter is not ready: {cause} Fix this, then restart the app."
 
 	return gr.HTML(
 		value=(
@@ -1003,7 +1002,7 @@ async def stream_all_models(
 	# A disabled Send button does not stop calls through Gradio's API, so gate here too.
 	if not CATALOG.ready:
 		blocked_message = (
-			"OpenRouter is not ready. Fix OPENROUTER_API_KEY, then restart the app."
+			"OpenRouter is not ready. See the banner above for the cause, then restart the app."
 			if CATALOG.api_key
 			else "Missing OPENROUTER_API_KEY in environment."
 		)

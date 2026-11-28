@@ -89,7 +89,8 @@ Degraded mode happens when the key is **missing**, the key is **rejected** by Op
 or the **model list fails to download**. The app still opens so you can see the layout,
 but it locks generation:
 
-- A red banner at the top of the Arena tab says OpenRouter is not ready.
+- A red banner at the top of the Arena tab says OpenRouter is not ready and names the
+  cause, for example `could not validate OPENROUTER_API_KEY (...)`.
 - The provider and model dropdowns and the **Send** button are disabled.
 - The panels show a built-in fallback list of the three default models.
 - If a prompt is submitted anyway (for example through Gradio's API), every panel reports
