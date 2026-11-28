@@ -18,7 +18,7 @@ jobs:
           set -euo pipefail
 
           forbidden='(^|/)(.*\.db|.*\.sqlite|.*\.sqlite3|.*-journal|.*-wal|.*-shm|\.env(\..*)?|mcp_browser_clients\.local\.json)$|^(votes\.jsonl?|arena_logs/.*)$'
-          matches="$(git ls-files | grep -E "$forbidden" || true)"
+          matches="$(git ls-files | grep -E "$forbidden" | grep -vx '.env.example' || true)"
 
           if [ -n "$matches" ]; then
             echo "Forbidden tracked files detected:"
